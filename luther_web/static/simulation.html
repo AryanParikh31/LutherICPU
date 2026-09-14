@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>INRIA SIBR - CPU-Native 3D Gaussian Simulation Engine (Forensic 4K)</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <!-- Three.js and Loaders -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body, html {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background-color: #05070a;
+      font-family: 'Inter', sans-serif;
+      color: #f1f5f9;
+    }
+    #sim-canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      outline: none;
+      cursor: grab;
+    }
+    #sim-canvas:active {
+      cursor: grabbing;
+    }
+
+    /* Minimalist Top HUD Bar */
+    .top-badge {
+      position: absolute;
+      top: 1.25rem;
+      left: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: rgba(10, 15, 26, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(0, 240, 255, 0.25);
+      border-radius: 9999px;
+      padding: 0.5rem 1.1rem;
+      font-size: 0.82rem;
+      font-weight: 500;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      pointer-events: auto;
+    }
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 12px #10b981;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    .badge-sep {
+      color: rgba(255, 255, 255, 0.2);
+    }
+    .badge-hl {
+      color: #00f0ff;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+    }
+
+    /* Floating Toggle Button (Top-Right) */
+    .btn-toggle-panel {
+      position: absolute;
+      top: 1.25rem;
+      right: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(0, 240, 255, 0.35);
+      color: #f8fafc;
+      padding: 0.6rem 1.2rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(0, 240, 255, 0.18);
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 110;
+    }
+    .btn-toggle-panel:hover {
+      background: rgba(0, 240, 255, 0.18);
+      border-color: #00f0ff;
+      transform: translateY(-2px);
+      box-shadow: 0 12px 28px rgba(0, 240, 255, 0.32);
+    }
+
+    /* SIBR DOCKED TOOLBAR PANEL (Left Dock) */
+    .sibr-panel {
+      position: absolute;
+      top: 4.8rem;
+      left: 1.25rem;
+      width: 320px;
+      max-height: calc(100vh - 6.5rem);
+      overflow-y: auto;
+      background: rgba(11, 17, 30, 0.94);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid rgba(0, 240, 255, 0.25);
+      border-radius: 1.2rem;
+      padding: 1.25rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85);
+      z-index: 105;
+      transition: all 0.3s ease;
+    }
+    .sibr-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .sibr-logo {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 1.05rem;
+      color: #00f0ff;
+      letter-spacing: 0.05em;
+    }
+    .sibr-badge {
+      background: rgba(0, 240, 255, 0.15);
+      border: 1px solid #00f0ff;
+      color: #00f0ff;
+      font-size: 0.65rem;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 0.15rem 0.5rem;
+      border-radius: 9999px;
+      font-weight: 600;
+    }
+    .sibr-section-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-top: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    .sibr-btn-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.4rem;
+      margin-bottom: 0.5rem;
+    }
+    .sibr-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #cbd5e1;
+      padding: 0.5rem 0.4rem;
+      border-radius: 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s ease;
+    }
+    .sibr-btn:hover {
+      background: rgba(0, 240, 255, 0.12);
+      border-color: #00f0ff;
+      color: #ffffff;
+    }
+    .sibr-btn.active {
+      background: linear-gradient(135deg, rgba(0, 240, 255, 0.3), rgba(168, 85, 247, 0.3));
+      border-color: #00f0ff;
+      color: #00f0ff;
+    }
+    .sibr-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      font-size: 0.78rem;
+      color: #e2e8f0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .sibr-toggle-row input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: #00f0ff;
+      cursor: pointer;
+    }
+    .sibr-btn-action {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #e2e8f0;
+      padding: 0.55rem 0.75rem;
+      border-radius: 0.5rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 0.4rem;
+      text-align: left;
+      transition: all 0.2s ease;
+    }
+    .sibr-btn-action:hover {
+      background: rgba(0, 240, 255, 0.15);
+      border-color: #00f0ff;
+      color: #00f0ff;
+      transform: translateX(3px);
+    }
+
+    /* Quick Bottom Toolbar */
+    .bottom-toolbar {
+      position: absolute;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      background: rgba(10, 15, 26, 0.85);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 9999px;
+      padding: 0.45rem 0.8rem;
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6);
+      z-index: 100;
+    }
+    .tool-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+      padding: 0.5rem 0.95rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .tool-btn:hover {
+      background: rgba(255, 255, 255, 0.14);
+      color: #ffffff;
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+    .tool-btn.active {
+      background: linear-gradient(135deg, rgba(0, 240, 255, 0.25), rgba(168, 85, 247, 0.25));
+      border-color: #00f0ff;
+      color: #00f0ff;
+    }
+
+    /* SIBR GROUND TRUTH SPLIT-SCREEN COMPARISON SLIDER */
+    #split-screen-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 80;
+    }
+    #gt-image-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-image: url('/photo/000008.jpg');
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      clip-path: polygon(0 0, 50% 0, 50% 100%, 0 100%);
+      transition: none;
+    }
+    #split-slider-bar {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      width: 4px;
+      height: 100vh;
+      background: #00f0ff;
+      box-shadow: 0 0 12px #00f0ff, 0 0 24px rgba(0, 240, 255, 0.5);
+      cursor: ew-resize;
+      pointer-events: auto;
+      transform: translateX(-50%);
+    }
+    #split-slider-bar::after {
+      content: '↔';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 32px;
+      height: 32px;
+      background: #080c14;
+      border: 2px solid #00f0ff;
+      color: #00f0ff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      box-shadow: 0 0 16px rgba(0, 240, 255, 0.6);
+    }
+    .split-label-left {
+      position: absolute;
+      bottom: 2rem;
+      left: 2rem;
+      background: rgba(0, 0, 0, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #f1f5f9;
+      padding: 0.4rem 0.8rem;
+      border-radius: 0.5rem;
+      font-size: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .split-label-right {
+      position: absolute;
+      bottom: 2rem;
+      right: 2rem;
+      background: rgba(0, 240, 255, 0.2);
+      border: 1px solid #00f0ff;
+      color: #00f0ff;
+      padding: 0.4rem 0.8rem;
+      border-radius: 0.5rem;
+      font-size: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Loading Overlay */
+    #loading-overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: #05070a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      z-index: 1000;
+      transition: opacity 0.5s ease;
+    }
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 3px solid rgba(0, 240, 255, 0.15);
+      border-top-color: #00f0ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <div style="font-size: 0.95rem; font-weight: 600; color: #f8fafc; letter-spacing: 0.05em;">
+      INRIA SIBR // INGESTING 3D GAUSSIANS...
+    </div>
+    <div style="font-size: 0.75rem; color: #94a3b8; font-family: 'JetBrains Mono', monospace;">
+      Pure CPU Eigendecomposition & WebGL2 Micro-Surfel Shaders
+    </div>
+  </div>
+
+  <!-- Top Status Badge -->
+  <div class="top-badge">
+    <div class="pulse-dot"></div>
+    <span style="font-weight: 700; color: #f8fafc;">SIBR 3DGS</span>
+    <span class="badge-sep">|</span>
+    <span id="badge-surfel-count" class="badge-hl">3,767,684 Surfels</span>
+    <span class="badge-sep">|</span>
+    <span id="badge-fps" class="badge-hl">60 FPS</span>
+  </div>
+
+  <!-- SIBR DOCKED TOOLBAR PANEL -->
+  <div id="sibr-dock-panel" class="sibr-panel">
+    <div class="sibr-header">
+      <span class="sibr-logo">SIBR // CORE</span>
+      <span class="sibr-badge">CPU-NATIVE</span>
+    </div>
+
+    <div class="sibr-section-title">RENDERING MODES</div>
+    <div class="sibr-btn-group">
+      <button id="btn-mode-0" class="sibr-btn active" onclick="setRenderMode(0)">RGB Radiance</button>
+      <button id="btn-mode-1" class="sibr-btn" onclick="setRenderMode(1)">Optical Depth</button>
+      <button id="btn-mode-2" class="sibr-btn" onclick="setRenderMode(2)">Surface Normals</button>
+      <button id="btn-mode-3" class="sibr-btn" onclick="setRenderMode(3)">Conic Footprints</button>
+    </div>
+
+    <div class="sibr-section-title">INSPECTION & CAMERAS</div>
+    <div class="sibr-toggle-row">
+      <label for="toggle-solid">Solid 4K Textured Mesh</label>
+      <input type="checkbox" id="toggle-solid" checked onchange="toggleSolidMeshMode(this.checked)">
+    </div>
+    <div class="sibr-toggle-row">
+      <label for="toggle-cameras">Show 251 Camera Frustums</label>
+      <input type="checkbox" id="toggle-cameras" onchange="toggleCameraFrustums(this.checked)">
+    </div>
+    <div class="sibr-toggle-row">
+      <label for="toggle-split">Ground Truth Split-Screen</label>
+      <input type="checkbox" id="toggle-split" onchange="toggleSplitScreen(this.checked)">
+    </div>
+
+    <div class="sibr-section-title">CAMERA BENCHMARKS</div>
+    <button class="sibr-btn-action" onclick="loadPose('side')">🚚 SIBR Side Profile (Photo 008)</button>
+    <button class="sibr-btn-action" onclick="loadPose('hero')">📸 Hero 3/4 Perspective</button>
+    <button class="sibr-btn-action" onclick="loadPose('cabin')">🔍 Interior Cabin & Wheel</button>
+    <button class="sibr-btn-action" onclick="toggleTurntable()">🎬 360° Turntable Orbit</button>
+  </div>
+
+  <!-- Bottom Quick Controls -->
+  <div class="bottom-toolbar">
+    <button id="btn-toggle-mesh" class="tool-btn active" onclick="toggleSolidMeshMode()">🧱 4K Mesh</button>
+    <button class="tool-btn" onclick="loadPose('side')">🚚 Side</button>
+    <button class="tool-btn" onclick="loadPose('hero')">📸 Hero</button>
+    <button class="tool-btn" onclick="toggleTurntable()">🎬 360° Orbit</button>
+    <button class="tool-btn" onclick="resetCamera()">🔄 Reset</button>
+  </div>
+
+  <!-- SIBR SPLIT-SCREEN COMPARISON SLIDER (Disabled by default) -->
+  <div id="split-screen-container" style="display: none;">
+    <div id="gt-image-overlay"></div>
+    <div id="split-slider-bar"></div>
+    <div class="split-label-left">📷 Ground Truth Photo 000008.jpg</div>
+    <div class="split-label-right">⚡ Live 3D Gaussian Splatting</div>
+  </div>
+
+  <!-- Fullscreen WebGL Canvas -->
+  <canvas id="sim-canvas"></canvas>
+
+  <script src="/js/sorter.js?v=5"></script>
+  <script src="/js/mesh_renderer.js?v=5"></script>
+  <script src="/js/simulation.js?v=5"></script>
+</body>
+</html>

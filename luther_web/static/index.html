@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MicroSurfel 3D - Autonomous 4K Scene Reconstruction & Simulation</title>
+  <meta name="description" content="Enterprise-grade 4K 3D Scene Reconstruction and Simulation platform utilizing planar micro-surfels, Epipolar Geometry, and boundary collision cages." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css" />
+  <!-- Three.js for high-performance WebGL 3D rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+  <!-- Ambient Glow Backgrounds -->
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+
+  <div class="app-container">
+    <!-- Top Navigation Bar -->
+    <header class="top-nav">
+      <div class="brand">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>MICROSURFEL <span>4K</span></h1>
+          <p class="brand-subtitle">Autonomous Epipolar Geometry & 3D Micro-Surfel Simulation Engine</p>
+        </div>
+      </div>
+
+      <nav class="nav-tabs" role="tablist">
+        <button class="nav-tab active" id="tab-btn-setup" onclick="switchTab('setup')">
+          <span class="tab-icon">📥</span> Studio Setup
+        </button>
+        <button class="nav-tab" id="tab-btn-monitor" onclick="switchTab('monitor')">
+          <span class="tab-icon">⚡</span> Training Monitor
+          <span class="live-pill" id="live-pill" style="display:none;">LIVE</span>
+        </button>
+        <button class="nav-tab" id="tab-btn-viewport" onclick="switchTab('viewport')">
+          <span class="tab-icon">🌐</span> 3D Walkthrough
+        </button>
+        <button class="nav-tab" id="tab-btn-gallery" onclick="switchTab('gallery')">
+          <span class="tab-icon">🎬</span> Simulation Proofs
+        </button>
+        <button class="nav-tab" id="tab-btn-explain" onclick="switchTab('explain')">
+          <span class="tab-icon">💡</span> How It Works
+        </button>
+        <a href="/simulation" target="_blank" style="text-decoration: none; display: flex; align-items: center; gap: 0.45rem; background: linear-gradient(135deg, rgba(0, 240, 255, 0.2), rgba(168, 85, 247, 0.2)); border: 1px solid #00f0ff; color: #00f0ff; padding: 0.45rem 1rem; border-radius: 9999px; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease;">
+          <span>📺 Fullscreen Simulation</span>
+          <span>↗</span>
+        </a>
+      </nav>
+
+      <div class="system-status-badge" id="system-badge">
+        <span class="status-dot"></span>
+        <span id="badge-text">Detecting Hardware...</span>
+      </div>
+    </header>
+
+    <!-- Notification Banner -->
+    <div id="notification-banner" class="notification-banner banner-safe">
+      <span class="banner-icon">🛡️</span>
+      <span id="banner-text">Running in Safe CPU Mode: Memory Ceiling & Auto-GC Active (8GB RAM Protected).</span>
+    </div>
+
+    <!-- MAIN CONTENT AREA -->
+    <main class="main-content">
+      
+      <!-- TAB 1: STUDIO SETUP & UPLOAD -->
+      <section id="tab-setup" class="tab-pane active">
+        <div class="grid-two-col">
+          <!-- Left Column: Image Dropzone & Gallery -->
+          <div class="panel glass-card">
+            <div class="panel-header">
+              <h2>📸 Multi-Angle Photographs</h2>
+              <span class="badge" id="image-count-badge">0 photos loaded</span>
+            </div>
+            
+            <div class="dropzone" id="dropzone">
+              <input type="file" id="file-input" multiple accept="image/jpeg,image/png,image/webp" />
+              <div class="dropzone-content">
+                <div class="upload-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
+                </div>
+                <p class="dropzone-primary">Drag & drop your multi-angle scene photos here</p>
+                <p class="dropzone-secondary">or click to browse files (JPG, PNG, WEBP)</p>
+              </div>
+            </div>
+
+            <!-- Image Thumbnail Grid -->
+            <div class="thumbnail-gallery" id="thumbnail-gallery">
+              <!-- Dynamically populated thumbnails -->
+            </div>
+
+            <div class="action-row">
+              <button class="btn btn-secondary" onclick="loadSampleDataset()">
+                ✨ Load Sample Dataset
+              </button>
+              <button class="btn btn-primary" id="btn-start-training" onclick="startReconstruction()">
+                🚀 Reconstruct & Simulate
+              </button>
+            </div>
+
+            <div class="section-divider"></div>
+
+            <!-- 1-Click Cloud GPU Bridge Card -->
+            <div class="cloud-bridge-card">
+              <div class="cloud-bridge-header">
+                <div class="cloud-icon">☁️</div>
+                <div>
+                  <h4>1-Click 4K Cloud GPU Optimization</h4>
+                  <p class="text-muted">Offload 3,500,000 surfels to a free 16 GB Google Colab T4 GPU in 6–8 minutes.</p>
+                </div>
+              </div>
+              <button class="btn btn-accent btn-sm" onclick="dispatchCloudTraining()">
+                ⚡ Package Dataset & Launch Colab
+              </button>
+            </div>
+          </div>
+
+          <!-- Right Column: Hardware Telemetry & Knobs -->
+          <div class="panel glass-card">
+            <div class="panel-header">
+              <h2>⚙️ System Hardware Profiler</h2>
+              <span class="badge badge-accent" id="hardware-mode-badge">AUTO-PROFILING</span>
+            </div>
+
+            <div class="specs-grid">
+              <div class="spec-card">
+                <span class="spec-label">Processor</span>
+                <span class="spec-value" id="spec-cpu">--</span>
+                <span class="spec-sub" id="spec-cpu-threads">--</span>
+              </div>
+              <div class="spec-card">
+                <span class="spec-label">System RAM</span>
+                <span class="spec-value" id="spec-ram">--</span>
+                <span class="spec-sub" id="spec-ram-avail">--</span>
+              </div>
+              <div class="spec-card">
+                <span class="spec-label">RAM Ceiling Guard</span>
+                <span class="spec-value" id="spec-ceiling">--</span>
+                <span class="spec-sub">OS Protected (>2.4 GB)</span>
+              </div>
+              <div class="spec-card">
+                <span class="spec-label">GPU Acceleration</span>
+                <span class="spec-value" id="spec-gpu">--</span>
+                <span class="spec-sub" id="spec-vram">--</span>
+              </div>
+            </div>
+
+            <div class="section-divider"></div>
+
+            <h3>🎛️ Algorithmic "Quality Knobs"</h3>
+            <p class="text-muted">Mathematical controls for epipolar densification and anti-aliasing.</p>
+
+            <div class="knob-group">
+              <div class="knob-header">
+                <label for="slider-tau">Gradient Densification Threshold (τ)</label>
+                <span class="knob-val" id="val-tau">0.00020</span>
+              </div>
+              <input type="range" id="slider-tau" min="0.00005" max="0.001" step="0.00005" value="0.0002" oninput="updateKnobVal('tau', this.value)" />
+              <p class="knob-desc">Splits micro-surfels down to sub-pixel scale, making thin wires, bicycle spokes, and brick mortar razor-sharp.</p>
+            </div>
+
+            <div class="knob-group">
+              <div class="knob-header">
+                <label for="slider-sh">Spherical Harmonics Degree</label>
+                <span class="knob-val" id="val-sh">Degree 1 (12 coeffs)</span>
+              </div>
+              <input type="range" id="slider-sh" min="0" max="3" step="1" value="1" oninput="updateKnobVal('sh', this.value)" />
+              <p class="knob-desc">Degree 3 calculates 16 real spherical harmonics per channel (48 floats) for realistic specular shine and metallic gloss.</p>
+            </div>
+
+            <div class="knob-group">
+              <div class="knob-header">
+                <label for="slider-aa">Anti-Aliasing Filter (Mip-Splatting Kernel ν)</label>
+                <span class="knob-val" id="val-aa">0.30 px</span>
+              </div>
+              <input type="range" id="slider-aa" min="0.1" max="1.0" step="0.05" value="0.3" oninput="updateKnobVal('aa', this.value)" />
+              <p class="knob-desc">Convolves 2D covariance with 0.3 I to prevent sub-pixel shimmering and steep-angle needle artifacts.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: LIVE RECONSTRUCTION MONITOR -->
+      <section id="tab-monitor" class="tab-pane">
+        <div class="monitor-container glass-card">
+          <div class="panel-header">
+            <div>
+              <h2>⚡ Real-Time Reconstruction Telemetry</h2>
+              <p class="text-muted" id="monitor-subtext">Waiting for reconstruction job...</p>
+            </div>
+            <div class="telemetry-badge" id="monitor-phase-badge">STANDBY</div>
+          </div>
+
+          <!-- Master Progress Bar -->
+          <div class="progress-wrap">
+            <div class="progress-info">
+              <span id="progress-step-text">Step 0 / 0</span>
+              <span id="progress-pct-text">0.0%</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-bar-fill" id="progress-fill" style="width: 0%;"></div>
+            </div>
+          </div>
+
+          <!-- Metric Gauges Grid -->
+          <div class="gauges-grid">
+            <div class="gauge-card">
+              <span class="gauge-title">Photometric Loss (L1)</span>
+              <span class="gauge-val text-cyan" id="gauge-loss">0.0000</span>
+              <span class="gauge-footer">Target: &lt; 0.030</span>
+            </div>
+            <div class="gauge-card">
+              <span class="gauge-title">PSNR Fidelity</span>
+              <span class="gauge-val text-violet" id="gauge-psnr">0.00 dB</span>
+              <span class="gauge-footer">High fidelity: &gt; 28 dB</span>
+            </div>
+            <div class="gauge-card">
+              <span class="gauge-title">Active Micro-Surfels</span>
+              <span class="gauge-val text-emerald" id="gauge-surfels">0</span>
+              <span class="gauge-footer" id="gauge-max-surfels">Cap: 150,000</span>
+            </div>
+            <div class="gauge-card">
+              <span class="gauge-title">RAM Usage & Ceiling</span>
+              <span class="gauge-val" id="gauge-ram">0 MB</span>
+              <span class="gauge-footer" id="gauge-ram-ceiling">Hard Ceiling: --</span>
+            </div>
+            <div class="gauge-card">
+              <span class="gauge-title">Estimated Remaining</span>
+              <span class="gauge-val text-amber" id="gauge-eta">--</span>
+              <span class="gauge-footer">Dynamic throughput</span>
+            </div>
+          </div>
+
+          <!-- Charts Area -->
+          <div class="charts-container">
+            <div class="chart-box">
+              <div class="chart-header">
+                <h4>Photometric Convergence (Loss Curve)</h4>
+                <span class="chart-legend text-cyan">● L1 + SSIM + Sobel</span>
+              </div>
+              <canvas id="loss-canvas" width="550" height="180"></canvas>
+            </div>
+            <div class="chart-box">
+              <div class="chart-header">
+                <h4>Visual Quality Progression (PSNR dB)</h4>
+                <span class="chart-legend text-violet">● PSNR</span>
+              </div>
+              <canvas id="psnr-canvas" width="550" height="180"></canvas>
+            </div>
+          </div>
+
+          <div class="terminal-log-box" id="terminal-log">
+            <div class="terminal-line text-muted">[SYSTEM] Telemetry pipeline connected. Awaiting start command.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: 3D WALKTHROUGH VIEWPORT & REAL-TIME SIMULATION -->
+      <section id="tab-viewport" class="tab-pane">
+        <div class="viewport-wrapper">
+          <!-- 3D Canvas -->
+          <canvas id="viewport-canvas"></canvas>
+
+          <!-- Top HUD Overlay -->
+          <div class="viewport-hud-top">
+            <div class="hud-pill">
+              <span class="hud-dot"></span>
+              <span id="hud-surfel-count">0 Micro-Surfels</span>
+            </div>
+            <div class="hud-pill">
+              <span>FPS: <b id="hud-fps">60</b></span>
+            </div>
+            <div class="hud-pill">
+              <span>Cage Clamping: <b id="hud-cage-status" class="text-emerald">ACTIVE</b></span>
+            </div>
+            <div class="hud-pill hud-clickable" id="btn-cinematic-orbit" onclick="toggleCinematicOrbit()">
+              <span>🎬 <b>360° Cinematic Orbit</b>: <span id="orbit-status-text" class="text-muted">OFF</span></span>
+            </div>
+          </div>
+
+          <!-- Floating Simulation Controls HUD -->
+          <div class="viewport-controls-hud glass-card">
+            <div class="hud-header">
+              <h3>🕹️ Camera & Simulation HUD</h3>
+              <button class="hud-minimize" onclick="toggleHud()">_</button>
+            </div>
+            <div class="hud-body" id="hud-body">
+              <div class="control-tip">
+                <span class="key-badge">Left Drag</span> 360° Orbit | 
+                <span class="key-badge">Scroll</span> Zoom | 
+                <span class="key-badge">Right Drag</span> Pan<br/>
+                <span class="key-badge">W</span><span class="key-badge">A</span><span class="key-badge">S</span><span class="key-badge">D</span> Walk | 
+                <span class="key-badge">Q</span><span class="key-badge">E</span> Height | 
+                <span class="key-badge">R</span> Center
+              </div>
+
+              <!-- Render Mode Selector -->
+              <div class="hud-slider-row">
+                <label>Visual Mode:</label>
+                <select id="select-render-mode" class="hud-select" onchange="changeRenderMode(this.value)">
+                  <option value="rgb">Photorealistic Micro-Surfels (RGB)</option>
+                  <option value="normals">Surface Normal Map (Orientations)</option>
+                  <option value="depth">Depth Heatmap (Front-to-Back)</option>
+                  <option value="wireframe">Surfel Disc Footprints</option>
+                </select>
+              </div>
+
+              <div class="hud-toggles">
+                <label class="toggle-wrap">
+                  <input type="checkbox" id="toggle-cage" checked onchange="toggleBoundaryCage(this.checked)" />
+                  <span class="toggle-slider"></span>
+                  <span class="toggle-label">Show Boundary Cage</span>
+                </label>
+                <label class="toggle-wrap">
+                  <input type="checkbox" id="toggle-clamp" checked onchange="toggleCameraClamping(this.checked)" />
+                  <span class="toggle-slider"></span>
+                  <span class="toggle-label">Enforce Collision Clamp</span>
+                </label>
+              </div>
+
+              <div class="hud-slider-row">
+                <label>Exposure: <span id="val-exposure">1.00</span></label>
+                <input type="range" id="slider-exposure" min="0.2" max="2.5" step="0.05" value="1.0" oninput="updateExposure(this.value)" />
+              </div>
+
+              <div class="hud-slider-row">
+                <label>Field of View: <span id="val-fov">54°</span></label>
+                <input type="range" id="slider-fov" min="30" max="90" step="1" value="54" oninput="updateFOV(this.value)" />
+              </div>
+
+              <div class="hud-slider-row">
+                <label>Surfel Scale: <span id="val-scale">1.8x</span></label>
+                <input type="range" id="slider-dot-scale" min="0.2" max="3.0" step="0.1" value="1.8" oninput="updateDotScale(this.value)" />
+              </div>
+
+              <div class="hud-actions-grid">
+                <button class="btn btn-secondary btn-sm" onclick="resetCameraView()">Center Camera</button>
+                <button class="btn btn-secondary btn-sm" onclick="takeSnapshot()">📸 Snapshot</button>
+                <button class="btn btn-accent btn-sm" id="btn-record-video" onclick="toggleRecordVideo()">🔴 Record Video</button>
+                <a class="btn btn-primary btn-sm" id="btn-export-ply" href="/api/scene/default/ply" download="scene.ply">💾 .PLY Export</a>
+              </div>
+            </div>
+          </div>
+
+          <!-- Collision Alert Flash -->
+          <div id="collision-alert" class="collision-alert">
+            <span>⚠️ CAMERA BOUNDARY REACHED: Soft Clamping Active</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: SIMULATION PROOFS & VIDEO GALLERY -->
+      <section id="tab-gallery" class="tab-pane">
+        <div class="gallery-container glass-card">
+          <div class="panel-header">
+            <div>
+              <h2>🎬 4K Simulation Proofs & Video Showcase</h2>
+              <p class="text-muted">High-fidelity 4K renders, 1080p hero views, and 360-degree orbital simulation video.</p>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="refreshProofs()">🔄 Refresh Proofs</button>
+          </div>
+
+          <!-- Video Player Showcase -->
+          <div class="video-showcase-box">
+            <h3>🎥 360° Real-Time Continuous Simulation Video</h3>
+            <div class="video-wrapper">
+              <video id="simulation-video" controls autoplay loop muted playsinline>
+                <source src="/api/renders/reference_video.mp4" type="video/mp4">
+                <source src="/reference_video.mp4" type="video/mp4">
+                Your browser does not support HTML5 video.
+              </video>
+            </div>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <!-- Proof Images & GIF Grid -->
+          <div class="proofs-grid">
+            <!-- Proof 1: 4K UHD Ultra View -->
+            <div class="proof-card">
+              <div class="proof-img-wrap">
+                <img src="/api/renders/truck_simulation_4k_ultra.png" alt="4K Ultra Quality View" onerror="this.src='/output/proof_renders/truck_simulation_4k_ultra.png'" />
+                <span class="proof-tag tag-4k">4K UHD</span>
+              </div>
+              <div class="proof-info">
+                <h4>4K UHD Ultra Super Quality Render</h4>
+                <p>3840x2160 native micro-surfel rasterization with Mip-Filter and analytical depth sorting.</p>
+                <a href="/api/renders/truck_simulation_4k_ultra.png" target="_blank" class="btn btn-secondary btn-sm">Full Resolution ↗</a>
+              </div>
+            </div>
+
+            <!-- Proof 2: 360-Degree Turntable Animation -->
+            <div class="proof-card">
+              <div class="proof-img-wrap">
+                <img src="/api/renders/truck_360_simulation.gif" alt="360-degree Turntable Simulation" onerror="this.src='/output/proof_renders/truck_360_simulation.gif'" />
+                <span class="proof-tag tag-gif">360° ANIMATED</span>
+              </div>
+              <div class="proof-info">
+                <h4>360° Turntable Orbital Simulation</h4>
+                <p>24-frame continuous turntable simulation sequence following COLMAP training trajectory.</p>
+                <a href="/api/renders/truck_360_simulation.gif" target="_blank" class="btn btn-secondary btn-sm">Open GIF ↗</a>
+              </div>
+            </div>
+
+            <!-- Proof 3: 1080p Hero View -->
+            <div class="proof-card">
+              <div class="proof-img-wrap">
+                <img src="/api/renders/truck_simulation_1080p_hero.png" alt="1080p Hero View" onerror="this.src='/output/proof_renders/truck_simulation_1080p_hero.png'" />
+                <span class="proof-tag">1080p HERO</span>
+              </div>
+              <div class="proof-info">
+                <h4>1080p Front-Quarter Hero View</h4>
+                <p>High-contrast evaluation of thin structures, specular sheen, and surface boundaries.</p>
+                <a href="/api/renders/truck_simulation_1080p_hero.png" target="_blank" class="btn btn-secondary btn-sm">View Image ↗</a>
+              </div>
+            </div>
+
+            <!-- Proof 4: 1080p Side Profile View -->
+            <div class="proof-card">
+              <div class="proof-img-wrap">
+                <img src="/api/renders/truck_simulation_1080p_side.png" alt="1080p Side Profile" onerror="this.src='/output/proof_renders/truck_simulation_1080p_side.png'" />
+                <span class="proof-tag">1080p SIDE</span>
+              </div>
+              <div class="proof-info">
+                <h4>1080p Side Profile Perspective</h4>
+                <p>Evaluation of planar surfel flatness, ground grid alignment, and wheel rim details.</p>
+                <a href="/api/renders/truck_simulation_1080p_side.png" target="_blank" class="btn btn-secondary btn-sm">View Image ↗</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: HOW IT WORKS (EXPLAIN LIKE I'M 10) -->
+      <section id="tab-explain" class="tab-pane">
+        <div class="explain-container">
+          <div class="explain-hero glass-card">
+            <h2>🧸 The 10-Year-Old Mental Model</h2>
+            <p class="explain-subtitle">How we transform flat photographs into continuous, photorealistic 3D simulations.</p>
+          </div>
+
+          <div class="cards-grid">
+            <!-- Card 1 -->
+            <div class="explain-card glass-card">
+              <div class="card-num">01</div>
+              <div class="card-icon-wrap">🔍</div>
+              <h3>The Photo Detective</h3>
+              <h4>Epipolar Geometry & Feature Matching</h4>
+              <blockquote class="card-quote">
+                "Imagine taking 100 photos of your bedroom. The software looks at them like a detective finding matching clues (like the corner of your desk) to figure out exactly where you were standing for every photo."
+              </blockquote>
+              <p class="card-detail">
+                We detect gradient keypoints across your photos, solve the 8-point camera alignment equations using RANSAC, and triangulate 3D point cloud seeds via Direct Linear Transform (DLT).
+              </p>
+            </div>
+
+            <!-- Card 2 -->
+            <div class="explain-card glass-card">
+              <div class="card-num">02</div>
+              <div class="card-icon-wrap">✨</div>
+              <h3>The Magic Flat Stickers</h3>
+              <h4>Planar 2D Micro-Surfels & Anti-Aliasing</h4>
+              <blockquote class="card-quote">
+                "Instead of stacking rigid blocks like Minecraft, the computer places millions of microscopic, shiny oval stickers over everything. On a bicycle spoke, they stretch into skinny needles; on a table, they lay completely flat. Because their edges melt together, you see a solid, real world instead of dots."
+              </blockquote>
+              <p class="card-detail">
+                Each planar surfel stores a 3D position $\mathbf{\mu}$, tangent vectors $\mathbf{u}, \mathbf{v}$, and explicit surface normal $\mathbf{n}$. Mip-filtering ($\mathbf{\Sigma}' + 0.3 I$) prevents aliasing.
+              </p>
+            </div>
+
+            <!-- Card 3 -->
+            <div class="explain-card glass-card">
+              <div class="card-num">03</div>
+              <div class="card-icon-wrap">🦎</div>
+              <h3>The Chameleon Glare</h3>
+              <h4>Spherical Harmonics (View-Dependent Radiance)</h4>
+              <blockquote class="card-quote">
+                "Each sticker remembers how light bounces off it. When you walk past a shiny window, the sticker changes color to create real sun reflections."
+              </blockquote>
+              <p class="card-detail">
+                Directional radiance is encoded in Degree 3 Legendre polynomial coefficients (48 floats per surfel), dynamically re-evaluated as your virtual camera navigates through the scene.
+              </p>
+            </div>
+
+            <!-- Card 4 -->
+            <div class="explain-card glass-card">
+              <div class="card-num">04</div>
+              <div class="card-icon-wrap">🛡️</div>
+              <h3>The Invisible Bumper</h3>
+              <h4>The Boundary Collision Cage</h4>
+              <blockquote class="card-quote">
+                "An invisible bubble cushion surrounds you inside the room so you cannot fall through the floor or wander into empty black space."
+              </blockquote>
+              <p class="card-detail">
+                A 3D convex hull with inward safety margins constantly cushions camera coordinates via <code>clamp_camera()</code>, preventing unmapped voids or glitchy clipping.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="js/sorter.js"></script>
+  <script src="js/viewer.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
