@@ -84,6 +84,12 @@ def main():
         help="Launch pure CPU software projection window fallback"
     )
     parser.add_argument(
+        "--import-bundle", "-b",
+        type=str,
+        default=None,
+        help="Path to downloaded Colab simulation bundle (luther_simulation_bundle.zip or .splat)"
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=8080,
@@ -91,6 +97,54 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Handle Colab bundle import directly
+    if args.import_bundle:
+        bundle_path = os.path.abspath(args.import_bundle)
+        if not os.path.exists(bundle_path):
+            print(f"[ERROR] Specified bundle path does not exist: {bundle_path}")
+            sys.exit(1)
+
+        out_dir = args.output or os.path.join(PROJECT_ROOT, "output", "colab_imported_simulation")
+        os.makedirs(out_dir, exist_ok=True)
+        splat_dst = os.path.join(out_dir, "scene.splat")
+        root_splat_dst = os.path.join(PROJECT_ROOT, "output", "scene.splat")
+
+        if bundle_path.endswith(".zip"):
+            import zipfile
+            print(f"[*] Extracting Colab simulation bundle: {os.path.basename(bundle_path)}...")
+            with zipfile.ZipFile(bundle_path, 'r') as zf:
+                zf.extractall(out_dir)
+            # Locate splat
+            cand_splat = os.path.join(out_dir, "scene.splat")
+            if os.path.exists(cand_splat):
+                import shutil
+                shutil.copy2(cand_splat, root_splat_dst)
+        elif bundle_path.endswith((".splat", ".ply")):
+            import shutil
+            shutil.copy2(bundle_path, splat_dst)
+            shutil.copy2(bundle_path, root_splat_dst)
+
+        # Update latest_simulation.json
+        manifest_data = {
+            "scene_name": "Cloud GPU Trained Scene",
+            "output_dir": out_dir,
+            "splat_path": root_splat_dst,
+            "source": "Google Colab 3DGS"
+        }
+        import json
+        with open(os.path.join(PROJECT_ROOT, "output", "latest_simulation.json"), "w") as f:
+            json.dump(manifest_data, f, indent=2)
+
+        print("\n" + "=" * 80)
+        print(" [SUCCESS] COLAB 3D SIMULATION BUNDLE IMPORTED!")
+        print(f" Target Directory: {out_dir}")
+        print(f" Active Splat:     {root_splat_dst}")
+        print("=" * 80 + "\n")
+
+        from luther_display import launch_interactive_3d_viewport
+        launch_interactive_3d_viewport(port=args.port)
+        return
 
     # Direct launch of desktop 3D simulation player if no training args provided
     if not args.images and not args.scene:

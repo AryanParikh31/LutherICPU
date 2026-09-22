@@ -1080,13 +1080,13 @@ class SIBRSimulationEngine {
       badgeSurfel.textContent = `${(count / 1000).toFixed(0)}k Splats`;
     }
 
-    // Set initial natural room overview framing
-    const overviewDist = Math.max(6.0, Math.min(22.0, this.sceneRadius * 1.0));
+    // Set optimal exterior overview framing outside the splat cloud
+    const overviewDist = Math.max(4.0, Math.min(30.0, this.sceneRadius * 1.6));
     this.spherical.set(overviewDist, Math.PI / 2.0 - 0.28, 0.45);
     this.targetCenter.set(0, 0, 0);
     this.updateCameraFromSpherical();
-    this.camera.near = 0.05;
-    this.camera.far = 250.0;
+    this.camera.near = 0.02;
+    this.camera.far = 300.0;
     this.camera.updateProjectionMatrix();
 
     const camBadge = document.getElementById("badge-cam-id");

@@ -260,6 +260,23 @@ class LutherDenseMVSEngine:
         bgr_colors = small_ref[ys, xs] # (N, 3)
         rgb_colors = np.column_stack([bgr_colors[:, 2], bgr_colors[:, 1], bgr_colors[:, 0]]) / 255.0
 
+        # Multi-View Geometric Consistency Filter (Drops spurious depth ray spikes)
+        if len(neighbor_views) > 0 and len(pts_world) > 10:
+            top_nbr = neighbor_views[0]
+            if top_nbr.image_path and os.path.exists(top_nbr.image_path):
+                # Reproject world points into neighboring camera
+                pts_nbr_cam = (top_nbr.R @ (pts_world - top_nbr.center).T).T
+                z_nbr = pts_nbr_cam[:, 2]
+                fx_n, fy_n = top_nbr.intrinsics.fx, top_nbr.intrinsics.fy
+                cx_n, cy_n = top_nbr.intrinsics.cx, top_nbr.intrinsics.cy
+                u_n = fx_n * (pts_nbr_cam[:, 0] / np.maximum(z_nbr, 1e-4)) + cx_n
+                v_n = fy_n * (pts_nbr_cam[:, 1] / np.maximum(z_nbr, 1e-4)) + cy_n
+
+                valid_nbr_proj = (z_nbr > 0.2) & (u_n >= 0) & (u_n < top_nbr.intrinsics.width) & (v_n >= 0) & (v_n < top_nbr.intrinsics.height)
+                if np.sum(valid_nbr_proj) > len(pts_world) * 0.15:
+                    pts_world = pts_world[valid_nbr_proj]
+                    rgb_colors = rgb_colors[valid_nbr_proj]
+
         return pts_world.astype(np.float32), rgb_colors.astype(np.float32)
 
     def run_dense_reconstruction(

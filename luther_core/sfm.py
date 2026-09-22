@@ -89,6 +89,34 @@ def triangulate_dlt_point(P1: np.ndarray, P2: np.ndarray, pt1: np.ndarray, pt2: 
     return X_3d.astype(np.float32)
 
 
+def extract_exif_focal_length(image_path: str, width: int, height: int) -> float:
+    """
+    Extracts true optical focal length from EXIF metadata.
+    Falls back to robust 35mm equivalent sensor model if EXIF is absent.
+    """
+    try:
+        from PIL import Image
+        with Image.open(image_path) as img:
+            exif = img._getexif()
+            if exif:
+                # Tag 41989: FocalLengthIn35mmFilm
+                focal_35mm = exif.get(41989)
+                if focal_35mm and float(focal_35mm) > 5.0:
+                    sensor_diag_35mm = 43.27
+                    sensor_diag_px = math.hypot(width, height)
+                    return float(focal_35mm) * (sensor_diag_px / sensor_diag_35mm)
+
+                # Tag 37386: FocalLength
+                focal_raw = exif.get(37386)
+                if focal_raw:
+                    f_val = float(focal_raw[0]) / float(focal_raw[1]) if isinstance(focal_raw, tuple) else float(focal_raw)
+                    if f_val > 1.0:
+                        return float(f_val) * (max(width, height) / 36.0)
+    except Exception:
+        pass
+    return 0.95 * max(width, height)
+
+
 class StructureFromMotionEngine:
     """Stage 2: Structure-from-Motion (SfM) Solver and Camera Ingestion."""
 
@@ -134,13 +162,13 @@ class StructureFromMotionEngine:
             features[i] = (path, kps, desc)
             logger.info(f"SIFT: [{os.path.basename(path)}] Extracted {len(kps):,} keypoints.")
 
-        # Read first image dimensions for camera intrinsics
+        # Read first image dimensions and extract TRUE optical focal length from EXIF
         sample_img = cv2.imread(image_files[0])
         h, w = sample_img.shape[:2]
-        # Pinhole approximation if uncalibrated: focal length ~ 1.2 * max(w, h)
-        focal = 1.2 * max(w, h)
+        focal = extract_exif_focal_length(image_files[0], w, h)
         cx, cy = w / 2.0, h / 2.0
         K = np.array([[focal, 0, cx], [0, focal, cy], [0, 0, 1]], dtype=np.float32)
+        logger.info(f"Calibrated Camera Intrinsics K: fx={focal:.1f}px, fy={focal:.1f}px, cx={cx:.1f}, cy={cy:.1f}")
 
         intrinsics = CameraIntrinsics(width=w, height=h, fx=focal, fy=focal, cx=cx, cy=cy, model="PINHOLE")
         cameras = {1: intrinsics}
