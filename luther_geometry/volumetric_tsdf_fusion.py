@@ -87,7 +87,8 @@ class VolumetricTSDFFusionEngine:
         colors: np.ndarray,
         camera_centers: Optional[np.ndarray] = None,
         voxel_res: Optional[int] = None,
-        camera_views: Optional[list] = None
+        camera_views: Optional[list] = None,
+        is_vehicle: bool = False
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Reconstructs a solid watertight 3D manifold directly from points and colors.
@@ -95,8 +96,8 @@ class VolumetricTSDFFusionEngine:
         """
         v_res = voxel_res or self.default_voxel_res
         
-        # Apply space carving and unobserved roof surface injection if camera views are provided
-        if camera_views and len(camera_views) > 0:
+        # Apply space carving and unobserved roof surface injection ONLY if explicitly reconstructing vehicles
+        if is_vehicle and camera_views and len(camera_views) > 0:
             points, colors = sky_silhouette_carver(points, colors, camera_views, min_sky_votes=2)
             points, colors = inject_unobserved_roof_surface(points, colors, camera_views=camera_views, grid_step=0.04)
 
@@ -104,7 +105,6 @@ class VolumetricTSDFFusionEngine:
             if camera_views and len(camera_views) > 0:
                 camera_centers = np.array([v.center for v in camera_views if hasattr(v, "center")], dtype=np.float32)
             if camera_centers is None or len(camera_centers) == 0:
-                # Default camera circle around points
                 centroid = np.mean(points, axis=0)
                 radius = np.max(np.linalg.norm(points - centroid, axis=1)) * 2.0
                 angles = np.linspace(0, 2 * np.pi, 12, endpoint=False)
@@ -115,8 +115,8 @@ class VolumetricTSDFFusionEngine:
 
         normals = compute_oriented_normals(points, camera_centers, k_neighbors=min(24, max(4, len(points) - 1)))
 
-        p_min = np.min(points, axis=0) - 0.2
-        p_max = np.max(points, axis=0) + 0.2
+        p_min = np.percentile(points, 0.5, axis=0) - 0.10
+        p_max = np.percentile(points, 99.5, axis=0) + 0.10
 
         gx = np.linspace(p_min[0], p_max[0], v_res, dtype=np.float32)
         gy = np.linspace(p_min[1], p_max[1], v_res, dtype=np.float32)
@@ -128,7 +128,7 @@ class VolumetricTSDFFusionEngine:
 
         volume = np.full((v_res, v_res, v_res), 1.0, dtype=np.float32)
         p_tree = cKDTree(points)
-        truncation_dist = 4.0 * max(dx, dy, dz)
+        truncation_dist = 2.5 * max(dx, dy, dz)
 
         for z_i in range(v_res):
             z_val = gz[z_i]
@@ -149,11 +149,17 @@ class VolumetricTSDFFusionEngine:
         verts[:, 2] += p_min[2]
         verts_world = np.column_stack([verts[:, 1], verts[:, 0], verts[:, 2]]).astype(np.float32)
 
+        # Filter out triangles that are too far from any real point (prevents false bridging across empty room)
+        face_centers = (verts_world[faces[:, 0]] + verts_world[faces[:, 1]] + verts_world[faces[:, 2]]) / 3.0
+        fc_dists, _ = p_tree.query(face_centers, k=1, workers=-1)
+        valid_face_mask = fc_dists <= (truncation_dist * 1.25)
+        clean_faces_initial = faces[valid_face_mask].astype(np.int32)
+
         # Prune silhouette sawtooth edge slivers
-        clean_v, clean_f = prune_silhouette_sawtooth_triangles(verts_world, faces.astype(np.int32), max_aspect_ratio=18.0)
+        clean_v, clean_f = prune_silhouette_sawtooth_triangles(verts_world, clean_faces_initial, max_aspect_ratio=18.0)
         
         # Apply Bilateral Normal Mesh Denoising (anisotropic edge-preserving smoothing)
-        filtered_v, _ = bilateral_normal_mesh_filter(clean_v, clean_f, iterations=4, sigma_s_factor=1.5, sigma_r=0.35, vertex_update_iters=8)
+        filtered_v, _ = bilateral_normal_mesh_filter(clean_v, clean_f, iterations=3, sigma_s_factor=1.5, sigma_r=0.35, vertex_update_iters=6)
 
         color_tree = cKDTree(points)
         _, col_idxs = color_tree.query(filtered_v, k=1, workers=-1)
@@ -322,9 +328,9 @@ class VolumetricTSDFFusionEngine:
 
 
 def run_volumetric_pipeline(
-    dataset_dir: str = "F:/tandt_db/tandt/truck",
+    dataset_dir: str,
     out_dir: str = "output",
-    scene_name: str = "truck"
+    scene_name: str = "simulation"
 ) -> Dict[str, Any]:
     """Runs complete end-to-end volumetric TSDF reconstruction and simulation packaging."""
     d_path = Path(dataset_dir)

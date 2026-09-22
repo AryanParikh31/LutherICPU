@@ -376,6 +376,14 @@ def sky_silhouette_carver(
     # Carve: remove points with >= min_sky_votes sky projections
     keep_mask = sky_votes < min_sky_votes
     n_removed = int(np.sum(~keep_mask))
+
+    if np.sum(keep_mask) < 0.25 * N:
+        logger.warning(
+            f"SkyCarver: Carving would remove {n_removed:,}/{N:,} points ({n_removed/max(N,1)*100:.1f}%), "
+            f"likely an indoor scene with white walls or blue objects. Retaining original points."
+        )
+        return points, colors
+
     logger.info(
         f"SkyCarver: removed {n_removed:,} sky-boundary points ({n_removed/max(N,1)*100:.1f}%) "
         f"using {views_checked} camera views."

@@ -18,4 +18,5 @@ from luther_core.camera import (
 from luther_core.colmap_loader import load_colmap_model
 from luther_core.ingestion import ImageQualityController, compute_laplacian_variance, compute_sha256
 from luther_core.sfm import StructureFromMotionEngine, extract_sift_features, match_sift_features, triangulate_dlt_point
+from luther_core.gaussian_splatting_engine import GaussianSplattingEngine
 

@@ -128,6 +128,11 @@ class ImageQualityController:
         if not os.path.isdir(images_dir):
             raise NotADirectoryError(f"Directory not found: {images_dir}")
 
+        # Check if images are inside an 'images' subfolder
+        sub_img = os.path.join(images_dir, "images")
+        if os.path.isdir(sub_img) and not any(f.lower().endswith(supported_extensions) for f in os.listdir(images_dir)):
+            images_dir = sub_img
+
         image_files = sorted([
             os.path.join(images_dir, f)
             for f in os.listdir(images_dir)

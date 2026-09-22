@@ -226,11 +226,11 @@ class SibrDesktopViewer(QMainWindow):
         panel_layout.setSpacing(10)
 
         # Header Badge
-        header = QLabel("SIBR // SIMULATION CORE")
+        header = QLabel("LUTHERI SIBR // SIMULATION CORE")
         header.setStyleSheet("font-size: 14px; font-weight: 700; color: #00f0ff; letter-spacing: 0.05em;")
         panel_layout.addWidget(header)
 
-        sub_header = QLabel("Pure Standalone Native Desktop Engine")
+        sub_header = QLabel("Pure CPU Gaussian SIBR 3D Simulation Platform")
         sub_header.setStyleSheet("font-size: 11px; color: #94a3b8; margin-bottom: 8px;")
         panel_layout.addWidget(sub_header)
 
@@ -355,7 +355,7 @@ class SibrDesktopViewer(QMainWindow):
 
         # Top Bar Badge
         top_bar = QHBoxLayout()
-        self.badge_status = QLabel(f"● SIBR 3DGS ACTIVE | {self.scene_name.upper()} | 60 FPS")
+        self.badge_status = QLabel(f"● LUTHERI SIBR ACTIVE | {self.scene_name.upper()} | 60 FPS")
         self.badge_status.setStyleSheet("""
             background-color: #0b111e;
             border: 1px solid rgba(0, 240, 255, 0.3);
@@ -539,11 +539,9 @@ class SibrDesktopViewer(QMainWindow):
 
 
 def launch_sibr_desktop(scene_name: str = "truck", proof_dir: Optional[str] = None):
-    """Entry point to launch the standalone PySide6 SIBR application window."""
-    app = QApplication.instance() or QApplication(sys.argv)
-    window = SibrDesktopViewer(scene_name=scene_name, proof_dir=proof_dir)
-    window.show()
-    app.exec()
+    """Entry point to launch the standalone 3D Gaussian Splatting & Mesh application window."""
+    from luther_display import launch_interactive_3d_viewport
+    launch_interactive_3d_viewport(port=8080)
 
 
 if __name__ == "__main__":

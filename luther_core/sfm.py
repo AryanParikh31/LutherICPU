@@ -111,6 +111,11 @@ class StructureFromMotionEngine:
             return load_colmap_model(sparse_dir=sparse_colmap_dir, images_dir=images_dir)
 
         # 2. Native CPU SIFT Feature-based Pose & Geometry Estimation directly from raw photographs
+        if os.path.isdir(images_dir):
+            sub_img = os.path.join(images_dir, "images")
+            if os.path.isdir(sub_img) and not any(f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")) for f in os.listdir(images_dir)):
+                images_dir = sub_img
+
         logger.info(f"Stage 2 (SfM): Running native CPU SIFT extraction & epipolar reconstruction from raw images in '{images_dir}'...")
 
         image_files = sorted([

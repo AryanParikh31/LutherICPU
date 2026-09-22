@@ -88,7 +88,9 @@ class LutherDenseMVSEngine:
         neighbor_views: List[CameraView],
         sparse_points: np.ndarray,
         downscale: int = 2,
-        patch_size: int = 7
+        patch_size: int = 7,
+        grid_step: int = 1,
+        is_indoor: Optional[bool] = None
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Estimates dense 3D points from a single reference view via vectorized plane-sweep NCC matching.
@@ -192,6 +194,10 @@ class LutherDenseMVSEngine:
             best_ncc[update_mask] = avg_ncc[update_mask]
             best_depth[update_mask] = d
 
+        # Joint Bilateral Filtering on estimated depth map to preserve sharp edges while smoothing planar metal/ground
+        depth_filtered = cv2.bilateralFilter(best_depth, d=5, sigmaColor=0.15, sigmaSpace=5.0)
+        best_depth = np.where(best_depth > 0, depth_filtered, best_depth)
+
         # Compute depth gradient to detect silhouette depth discontinuities
         grad_dx = cv2.Sobel(best_depth, cv2.CV_32F, 1, 0, ksize=3)
         grad_dy = cv2.Sobel(best_depth, cv2.CV_32F, 0, 1, ksize=3)
@@ -202,37 +208,46 @@ class LutherDenseMVSEngine:
         # to prevent background sky/foliage from pulling roofline edge pixels out of alignment
         silhouette_bleed = (relative_grad > 0.35) & (best_ncc < 0.68)
 
-        # Sky zone pre-masking (upstream fix — prevents sky-contaminated NCC winners from entering point cloud)
-        # Detects blue sky (H: 85-130 in OpenCV, low S, high V) and overcast white sky (low S, very high V).
-        # Dilates by 7px to create a boundary exclusion buffer, blocking roofline-adjacent contaminated pixels.
-        # IMPORTANT: Run on original-resolution image to avoid HSV threshold unreliability from downscaling
-        hsv_ref_full = cv2.cvtColor(ref_img, cv2.COLOR_BGR2HSV).astype(np.float32)
-        h_ch = hsv_ref_full[:, :, 0]          # 0-180 in OpenCV
-        s_ch = hsv_ref_full[:, :, 1] / 255.0
-        v_ch = hsv_ref_full[:, :, 2] / 255.0
-        sky_blue_mask  = (h_ch >= 85) & (h_ch <= 130) & (s_ch < 0.35) & (v_ch > 0.50)
-        sky_white_mask = (s_ch < 0.12) & (v_ch > 0.75)
-        sky_raw = (sky_blue_mask | sky_white_mask).astype(np.uint8)
-        # Dilate 15x15 kernel so that roofline-adjacent pixels (which straddle sky) are also excluded
-        sky_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        sky_zone_full = cv2.dilate(sky_raw, sky_kernel) > 0  # (H_orig, W_orig) bool
-        # Downscale mask to match working resolution
-        sky_zone_mask = cv2.resize(sky_zone_full.astype(np.uint8), (small_w, small_h), interpolation=cv2.INTER_NEAREST) > 0
+        # Auto-detect indoor scene if not explicitly specified
+        if is_indoor is None:
+            # Check upper portion for texture and lack of intense blue sky saturation
+            h_top = max(10, int(small_h * 0.3))
+            top_gray = small_gray[:h_top, :]
+            lap_var = cv2.Laplacian(top_gray, cv2.CV_32F).var()
+            hsv_top = cv2.cvtColor(small_ref[:h_top, :], cv2.COLOR_BGR2HSV).astype(np.float32)
+            blue_sky_ratio = np.mean((hsv_top[:, :, 0] >= 85) & (hsv_top[:, :, 0] <= 130) & (hsv_top[:, :, 1] > 60))
+            is_indoor = (blue_sky_ratio < 0.05) and (lap_var > 25.0)
 
-        # Filter out low-confidence, sky-zone, and ambiguous silhouette edge pixels
-        min_ncc_thresh = 0.45
+        if is_indoor:
+            # Zero sky carving for indoor rooms: preserve all white walls, ceilings, and light floors
+            sky_zone_mask = np.zeros((small_h, small_w), dtype=bool)
+        else:
+            # Outdoor sky zone masking
+            hsv_ref_full = cv2.cvtColor(ref_img, cv2.COLOR_BGR2HSV).astype(np.float32)
+            h_ch = hsv_ref_full[:, :, 0]          # 0-180 in OpenCV
+            s_ch = hsv_ref_full[:, :, 1] / 255.0
+            v_ch = hsv_ref_full[:, :, 2] / 255.0
+            sky_blue_mask  = (h_ch >= 85) & (h_ch <= 130) & (s_ch > 0.20) & (v_ch > 0.40)
+            sky_white_mask = (s_ch < 0.04) & (v_ch > 0.95)
+            sky_raw = (sky_blue_mask | sky_white_mask).astype(np.uint8)
+            sky_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            sky_zone_full = cv2.dilate(sky_raw, sky_kernel) > 0
+            sky_zone_mask = cv2.resize(sky_zone_full.astype(np.uint8), (small_w, small_h), interpolation=cv2.INTER_NEAREST) > 0
+
+        # Filter out low-confidence and ambiguous silhouette edge pixels
+        min_ncc_thresh = 0.48
         valid_pixels = (best_ncc >= min_ncc_thresh) & (std_ref >= 3.0) & (best_depth > 0) & (~silhouette_bleed) & (~sky_zone_mask)
         
-        # Subsample grid for dense point cloud
-        grid_step = 2
         ys, xs = np.where(valid_pixels)
         if len(ys) == 0:
             return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.float32)
 
-        # Step sampling
-        sub_mask = (ys % grid_step == 0) & (xs % grid_step == 0)
-        ys = ys[sub_mask]
-        xs = xs[sub_mask]
+        # Grid step subsampling (grid_step = 1 evaluates all valid pixels)
+        if grid_step > 1:
+            sub_mask = (ys % grid_step == 0) & (xs % grid_step == 0)
+            ys = ys[sub_mask]
+            xs = xs[sub_mask]
+
         ds = best_depth[ys, xs]
 
         # Vectorized 3D back-projection

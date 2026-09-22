@@ -5,10 +5,10 @@ Runs the complete 5-stage CPU photogrammetry and simulation model from a single 
 and automatically opens the interactive SIBR-like 3D simulation popup window upon completion.
 
 Usage Example:
-  python run.py --images "F:/tandt_db/tandt/truck/images" --colmap "F:/tandt_db/tandt/truck/sparse/0" --iterations 30000
+  python run.py --images "path/to/your/images" --iterations 30000
 
 Short Options:
-  python run.py -i "F:/tandt_db/tandt/truck/images" -c "F:/tandt_db/tandt/truck/sparse/0" -n 30k
+  python run.py -i "path/to/your/images" -n 30k
 """
 
 import os
@@ -36,8 +36,8 @@ def main():
     parser.add_argument(
         "--images", "-i",
         type=str,
-        default=r"F:\tandt_db\tandt\truck\images",
-        help="Path to folder containing multi-angle source photographs"
+        default=None,
+        help="Path to folder containing multi-angle source photographs (Required)"
     )
     parser.add_argument(
         "--colmap", "-c",
@@ -82,6 +82,11 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if not args.images:
+        print("[ERROR] Please provide the path to your input images using '--images <path>' or '-i <path>'.")
+        parser.print_help()
+        sys.exit(1)
 
     images_path = os.path.abspath(args.images)
     if not os.path.exists(images_path):

@@ -71,33 +71,28 @@ pip install -r requirements.txt
 
 ## 🚀 Quick Start & Usage
 
-### 1. Run 3D Reconstruction CLI
-Run reconstruction from a directory of source photos:
+### 1. Train Model & Synthesize 3D Simulation (100% Native CPU)
+Give your images directory, iteration target, and output path. Your model performs all 5 stages natively directly from the raw photographs (zero external COLMAP files needed):
 ```bash
-# Full simulation pipeline
-python run_luther.py --images "path/to/photos" --colmap "path/to/colmap/sparse/0" --iterations 30000
+# Pure CPU 3D reconstruction & simulation synthesis:
+python simulate.py -i "path/to/images" -n 30k -o "output/my_simulation"
 
-# Short syntax
-python run_luther.py -i "path/to/photos" -n 30k
+# Or with full flags:
+python simulate.py --images "path/to/images" --iterations 30000 --output "output/my_simulation"
 ```
 
-### 2. Launch Web GUI & Interactive Studio
-Start the local FastAPI server and browser studio:
+### 2. Interactive Real-Time 3D Simulation Viewport
+Open the interactive 60 FPS real-time 3D orbit platform in your browser:
 ```bash
-python run.py
+python simulate.py --web
+# Or directly:
+python luther_display.py
 ```
-Open your browser at `http://127.0.0.1:8000` to interactively upload photos, monitor 3D reconstruction progress, and view rendered angles.
+Open `http://127.0.0.1:8080` for real-time 3D orbit, pan, zoom, point cloud inspection, textured mesh, and calibrated camera frustums.
 
-### 3. Run Benchmark Scenes
-```bash
-python run_luther.py --scene truck
-```
-
-### 4. Run Automated Test Suite
+### 3. Run Automated Test Suite
 ```bash
 pytest tests/ -v
-# or via CLI launcher:
-python run_luther.py --test
 ```
 
 ---

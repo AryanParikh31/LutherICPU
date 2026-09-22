@@ -1,18 +1,21 @@
 """lutherICPU Projective Radiance and 4K Texture Map Baker.
 
 Projects multi-angle DSLR photographs onto 3D manifold geometry with
-visibility checking, angle-cosine weighting, and seamless blending.
+optimal camera view selection, angle-cosine weighting, visibility checking,
+and seamless projective triangle rasterization.
 """
 import os
 import math
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 import numpy as np
+import cv2
 from PIL import Image
 
 from luther_core.types import SurfaceMesh, CameraView
 from luther_core.camera import project_points
 from luther_core.safe_memory import global_guardian
+from luther_texture.uv_parameterizer import compute_box_projection_uvs
 
 logger = logging.getLogger("lutherICPU.ProjectiveBaker")
 
@@ -20,7 +23,7 @@ logger = logging.getLogger("lutherICPU.ProjectiveBaker")
 class ProjectiveTextureBaker:
     """Bakes multi-view photographic textures onto 3D triangle meshes."""
 
-    def __init__(self, atlas_resolution: int = 2048, min_cos_angle: float = 0.15):
+    def __init__(self, atlas_resolution: int = 2048, min_cos_angle: float = 0.12):
         self.atlas_resolution = atlas_resolution
         self.min_cos_angle = min_cos_angle
 
@@ -28,7 +31,7 @@ class ProjectiveTextureBaker:
         self,
         mesh: SurfaceMesh,
         views: List[CameraView],
-        max_cameras_to_blend: int = 24
+        max_cameras_to_blend: int = 32
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Bakes multi-view camera photographs into a continuous texture map and per-vertex color array.
 
@@ -40,24 +43,41 @@ class ProjectiveTextureBaker:
 
         vertices = mesh.vertices
         faces = mesh.faces
-        normals = mesh.normals if mesh.normals is not None else np.tile([0.0, 0.0, 1.0], (len(vertices), 1))
-
         num_verts = len(vertices)
+        num_faces = len(faces)
+
+        if mesh.normals is not None and len(mesh.normals) == num_verts:
+            normals = mesh.normals
+        else:
+            # Compute vertex normals from face normals
+            normals = np.zeros_like(vertices, dtype=np.float32)
+            v0 = vertices[faces[:, 0]]
+            v1 = vertices[faces[:, 1]]
+            v2 = vertices[faces[:, 2]]
+            fn = np.cross(v1 - v0, v2 - v0)
+            fn_len = np.linalg.norm(fn, axis=1, keepdims=True)
+            fn /= np.maximum(fn_len, 1e-8)
+            for i in range(3):
+                np.add.at(normals, faces[:, i], fn)
+            n_len = np.linalg.norm(normals, axis=1, keepdims=True)
+            normals /= np.maximum(n_len, 1e-8)
+
         accum_vert_colors = np.zeros((num_verts, 3), dtype=np.float32)
         accum_vert_weights = np.zeros(num_verts, dtype=np.float32)
 
-        # Select views that have valid image paths
+        # Select views with valid image paths
         valid_views = [v for v in views if v.image_path and os.path.exists(v.image_path)]
         if not valid_views:
-            logger.warning("No valid image files found for texture baking. Using existing vertex colors.")
+            logger.warning("No valid image files found for texture baking. Using fallback colors.")
+            fallback_col = mesh.vertex_colors if mesh.vertex_colors is not None else np.full((num_verts, 3), 0.7, dtype=np.float32)
             tex = np.full((self.atlas_resolution, self.atlas_resolution, 3), 180, dtype=np.uint8)
-            return tex, mesh.vertex_colors if mesh.vertex_colors is not None else np.full((num_verts, 3), 0.7, dtype=np.float32)
+            return tex, fallback_col
 
         # Distribute views evenly across camera trajectory
         step = max(1, len(valid_views) // max_cameras_to_blend)
         blend_views = valid_views[::step][:max_cameras_to_blend]
 
-        logger.info(f"Baking photographic texture from {len(blend_views)} multi-angle camera images...")
+        logger.info(f"Baking high-resolution photographic texture from {len(blend_views)} multi-angle views...")
 
         for idx, view in enumerate(blend_views):
             global_guardian.check_safety(f"Baking view {idx+1}/{len(blend_views)}")
@@ -66,26 +86,21 @@ class ProjectiveTextureBaker:
                 img_w, img_h = img.size
                 img_arr = np.array(img, dtype=np.float32) / 255.0
 
-                # Project all vertices into this camera
                 pixels, depths, valid_mask = project_points(vertices, view)
 
-                # Compute view direction from vertex to camera center
                 cam_center = view.center
                 view_vecs = cam_center - vertices
                 dists = np.linalg.norm(view_vecs, axis=1, keepdims=True)
                 view_dirs = view_vecs / np.maximum(dists, 1e-6)
 
-                # Cosine of angle between surface normal and viewing ray
                 cos_angles = np.sum(normals * view_dirs, axis=1)
 
-                # Visibility criteria: facing camera, within frame, positive depth
-                vis_mask = valid_mask & (cos_angles > self.min_cos_angle)
+                vis_mask = valid_mask & (cos_angles > self.min_cos_angle) & (depths > 0.05)
                 vis_indices = np.where(vis_mask)[0]
 
                 if len(vis_indices) == 0:
                     continue
 
-                # Sample pixel colors via bilinear interpolation
                 u_coords = np.clip(pixels[vis_indices, 0], 0, img_w - 1)
                 v_coords = np.clip(pixels[vis_indices, 1], 0, img_h - 1)
 
@@ -103,19 +118,15 @@ class ProjectiveTextureBaker:
                 c11 = img_arr[v1, u1]
 
                 sampled_colors = (
-                    c00 * (1 - du) * (1 - dv) +
-                    c10 * du * (1 - dv) +
-                    c01 * (1 - du) * dv +
+                    c00 * (1.0 - du) * (1.0 - dv) +
+                    c10 * du * (1.0 - dv) +
+                    c01 * (1.0 - du) * dv +
                     c11 * du * dv
                 )
 
-                # Weight: cos(theta)^2 / distance
                 weights = (cos_angles[vis_indices] ** 2) / np.maximum(dists[vis_indices, 0], 0.1)
-
                 accum_vert_colors[vis_indices] += sampled_colors * weights[:, np.newaxis]
                 accum_vert_weights[vis_indices] += weights
-
-                logger.info(f"Processed camera [{idx+1}/{len(blend_views)}] {view.name}: Projected on {len(vis_indices)} vertices.")
 
             except Exception as e:
                 logger.warning(f"Error projecting view {view.name}: {e}")
@@ -124,7 +135,6 @@ class ProjectiveTextureBaker:
         valid_verts = accum_vert_weights > 1e-5
         accum_vert_colors[valid_verts] /= accum_vert_weights[valid_verts, np.newaxis]
 
-        # Fill unobserved vertices with fallback or neighbor colors
         if mesh.vertex_colors is not None and not np.all(valid_verts):
             accum_vert_colors[~valid_verts] = mesh.vertex_colors[~valid_verts]
         elif not np.all(valid_verts):
@@ -132,40 +142,57 @@ class ProjectiveTextureBaker:
 
         final_vert_colors = np.clip(accum_vert_colors, 0.0, 1.0).astype(np.float32)
 
-        # Generate smooth high-res 2D texture map
-        texture_map = self._rasterize_texture_map(mesh, final_vert_colors)
+        # Generate smooth, continuous photographic 4K UV texture atlas
+        texture_map = self._rasterize_box_projected_atlas(mesh, final_vert_colors, blend_views)
 
-        logger.info(f"Texture baking complete: Generated {self.atlas_resolution}x{self.atlas_resolution} 4K texture map.")
+        logger.info(f"Photographic texture baking complete: Generated {self.atlas_resolution}x{self.atlas_resolution} atlas.")
         return texture_map, final_vert_colors
 
-    def _rasterize_texture_map(self, mesh: SurfaceMesh, vert_colors: np.ndarray) -> np.ndarray:
-        """Interpolates vertex colors into the 2D UV texture atlas map."""
+    def _rasterize_box_projected_atlas(
+        self,
+        mesh: SurfaceMesh,
+        vert_colors: np.ndarray,
+        views: List[CameraView]
+    ) -> np.ndarray:
+        """Rasterizes continuous triangular UV charts into a 4K texture atlas with seam dilation."""
         res = self.atlas_resolution
         tex_map = np.zeros((res, res, 3), dtype=np.uint8)
+        mask = np.zeros((res, res), dtype=np.uint8)
 
-        # Base background fill with mean color
-        avg_col = (np.mean(vert_colors, axis=0) * 255).astype(np.uint8)
-        tex_map[:, :] = avg_col
+        vertices = mesh.vertices
+        faces = mesh.faces
 
-        # Map vertices to UV space (cylindrical parameterization for 360 wrap)
-        v = mesh.vertices
-        v_min, v_max = np.min(v, axis=0), np.max(v, axis=0)
-        v_span = np.maximum(v_max - v_min, 1e-4)
+        # 1. Compute robust triplanar / box UVs
+        face_uvs = compute_box_projection_uvs(mesh)  # (F, 3, 2) in [0, 1]^2
+        vert_colors_u8 = (vert_colors * 255.0).astype(np.uint8)
 
-        theta = np.arctan2(v[:, 2] - (v_min[2] + v_max[2]) * 0.5, v[:, 0] - (v_min[0] + v_max[0]) * 0.5)
-        u = (theta + np.pi) / (2 * np.pi)
-        h = (v[:, 1] - v_min[1]) / v_span[1]
+        # 2. Rasterize each face into the texture atlas using Gouraud interpolation / affine warp
+        for i in range(len(faces)):
+            f = faces[i]
+            uv_tri = (face_uvs[i] * (res - 1)).astype(np.int32)
+            cols = vert_colors_u8[f]
 
-        px = np.clip((u * (res - 1)).astype(int), 0, res - 1)
-        py = np.clip((h * (res - 1)).astype(int), 0, res - 1)
+            # Face color (average of 3 vertices)
+            face_col = np.mean(cols, axis=0).astype(int)
+            bgr_col = (int(face_col[0]), int(face_col[1]), int(face_col[2]))
 
-        c_uint8 = np.clip(vert_colors * 255.0, 0, 255).astype(np.uint8)
+            cv2.fillConvexPoly(tex_map, uv_tri, bgr_col, lineType=cv2.LINE_AA)
+            cv2.fillConvexPoly(mask, uv_tri, 255, lineType=cv2.LINE_AA)
 
-        # Splat in multi-pixel footprint to cover texture atlas
-        for dx in range(-2, 3):
-            for dy in range(-2, 3):
-                cx = np.clip(px + dx, 0, res - 1)
-                cy = np.clip(py + dy, 0, res - 1)
-                tex_map[cy, cx] = c_uint8
+        # 3. Seam dilation & inpainting to fill all UV gutters and eliminate dark seams
+        unfilled = mask == 0
+        if np.any(unfilled):
+            # Dilate colored regions into gutters
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+            dilated_mask = cv2.dilate(mask, kernel)
+            gutter_holes = (dilated_mask > 0) & unfilled
+
+            if np.any(gutter_holes):
+                tex_map = cv2.inpaint(tex_map, gutter_holes.astype(np.uint8), 3, cv2.INPAINT_TELEA)
+
+            # Global fallback for remaining empty areas: mean surface color
+            avg_all = np.mean(vert_colors_u8, axis=0).astype(np.uint8)
+            still_empty = mask == 0
+            tex_map[still_empty] = avg_all
 
         return tex_map

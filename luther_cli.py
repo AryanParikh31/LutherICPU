@@ -2,7 +2,7 @@
 lutherICPU Standalone CLI Entry Point.
 
 Usage:
-  python luther_cli.py --images "F:/tandt_db/tandt/truck/images" --colmap "F:/tandt_db/tandt/truck/sparse/0" --iterations 30000 --serve
+  python luther_cli.py --images "path/to/your/images" --iterations 30000 --serve
 """
 import sys
 from run_luther import main

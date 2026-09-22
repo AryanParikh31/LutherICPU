@@ -330,12 +330,25 @@ class SurfelViewer {
         varying vec3 v_normalColor;
         varying float v_depth;
 
-        mat3 quaternion_to_rotation(vec4 q) {
-          float r = q.x, x = q.y, y = q.z, z = q.w;
+        mat3 buildTransformedRotation(vec4 q) {
+          vec4 nq = normalize(q);
+          float r = nq.x, x = nq.y, y = nq.z, z = nq.w;
+          
+          float r00 = 1.0 - 2.0 * (y * y + z * z);
+          float r01 = 2.0 * (x * y - r * z);
+          float r02 = 2.0 * (x * z + r * y);
+          float r10 = 2.0 * (x * y + r * z);
+          float r11 = 1.0 - 2.0 * (x * x + z * z);
+          float r12 = 2.0 * (y * z - r * x);
+          float r20 = 2.0 * (x * z - r * y);
+          float r21 = 2.0 * (y * z + r * x);
+          float r22 = 1.0 - 2.0 * (x * x + y * y);
+
+          // Exact T * R * T similarity transformation
           return mat3(
-            1.0 - 2.0*(y*y + z*z), 2.0*(x*y - r*z), 2.0*(x*z + r*y),
-            2.0*(x*y + r*z), 1.0 - 2.0*(x*x + z*z), 2.0*(y*z - r*x),
-            2.0*(x*z - r*y), 2.0*(y*z + r*x), 1.0 - 2.0*(x*x + y*y)
+            vec3( r00, -r10, -r20),
+            vec3(-r01,  r11,  r21),
+            vec3(-r02,  r12,  r22)
           );
         }
 
@@ -345,13 +358,13 @@ class SurfelViewer {
           float depth = -cam_pos.z;
           v_depth = depth;
 
-          if (depth <= 0.1 || depth >= 150.0) {
+          if (cam_pos.z >= -0.05 || depth >= 200.0) {
             gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
             return;
           }
 
-          // 2. Reconstruct 3D Covariance Matrix Sigma = R * S * S^T * R^T
-          mat3 R = quaternion_to_rotation(a_rotation);
+          // 2. Reconstruct 3D Covariance Matrix Sigma = (T*R*T) * S * S^T * (T*R*T)^T
+          mat3 R = buildTransformedRotation(a_rotation);
           vec3 eff_scale = a_scale * u_dotScale;
           mat3 S = mat3(
             eff_scale.x, 0.0, 0.0,

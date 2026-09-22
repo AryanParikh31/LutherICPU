@@ -9,16 +9,13 @@ Pure CPU-native 3D reconstruction and simulation model:
 5. Stage 5: Photographic Texturing & Supreme Continuous Radiance Simulation Rendering
 
 Usage Examples:
-  # 1. Run simulation on multi-angle images with auto-discovered COLMAP:
-  python run_luther.py --images "F:/tandt_db/tandt/truck/images" --iterations 30000
+  # 1. Run simulation on user-provided multi-angle images:
+  python run_luther.py --images "path/to/your/images" --iterations 30000
 
   # 2. Short options syntax:
-  python run_luther.py -i "F:/tandt_db/tandt/truck/images" -c "F:/tandt_db/tandt/truck/sparse/0" -n 30k
+  python run_luther.py -i "path/to/your/images" -n 30k
 
-  # 3. Predefined benchmark scene:
-  python run_luther.py --scene truck
-
-  # 4. Automated verification test suite:
+  # 3. Automated verification test suite:
   python run_luther.py --test
 """
 
@@ -108,9 +105,15 @@ def main():
         help="Run full multi-dataset simulation benchmark"
     )
     parser.add_argument(
+        "--no-display",
+        action="store_true",
+        help="Skip auto-launching the desktop interactive simulation player window"
+    )
+    parser.add_argument(
         "--display",
         action="store_true",
-        help="Launch native desktop interactive 3D simulation player window"
+        default=True,
+        help="Launch native desktop interactive 3D simulation player window (default: True)"
     )
     parser.add_argument(
         "--serve",
@@ -140,29 +143,19 @@ def main():
         run_full_benchmark(output_dir=args.output)
         return
 
-    # 3. Scene Shortcut Mapping
-    scene_map = {
-        "truck": (r"F:\tandt_db\tandt\truck\images", r"F:\tandt_db\tandt\truck\sparse\0"),
-        "train": (r"F:\tandt_db\tandt\train\images", r"F:\tandt_db\tandt\train\sparse\0"),
-        "drjohnson": (r"F:\tandt_db\db\drjohnson\images", r"F:\tandt_db\db\drjohnson\sparse\0"),
-        "playroom": (r"F:\tandt_db\db\playroom\images", r"F:\tandt_db\db\playroom\sparse\0")
-    }
-
+    # 3. User-Specified Image Path Handling
     if args.scene and not args.images:
-        name_key = args.scene.lower()
-        if name_key in scene_map:
-            args.images, args.colmap = scene_map[name_key]
-        else:
+        if os.path.isdir(args.scene):
             args.images = args.scene
 
-    # Default fallback to truck dataset if no arguments provided
     if not args.images:
-        if os.path.exists(r"F:\tandt_db\tandt\truck\images"):
-            args.images, args.colmap = scene_map["truck"]
-            args.scene = "truck"
-        else:
-            parser.print_help()
-            return
+        print("[ERROR] Please provide the path to your input images using '--images <path>' or '-i <path>'.")
+        parser.print_help()
+        return
+
+    if not os.path.exists(args.images):
+        print(f"[ERROR] The specified images path does not exist: {args.images}")
+        return
 
     iters = parse_iteration_count(args.iterations)
     scene_name = args.scene.lower() if args.scene else os.path.basename(os.path.normpath(args.images))
@@ -210,8 +203,15 @@ def main():
             print(f" Simulation Frame: [{r_name}] -> {r_path}")
     print("=" * 80 + "\n")
 
-    if args.display:
-        display_simulation_window(result.get("renders", {}), scene_name=scene_name)
+    # Auto-display interactive 3D simulation desktop window unless --no-display is passed
+    if not args.no_display:
+        try:
+            from luther_display import launch_interactive_3d_viewport
+            launch_interactive_3d_viewport(port=args.port)
+        except Exception as e:
+            logger.warning(f"Could not launch 3D viewport ({e}), falling back to software window.")
+            proof_p = os.path.join(result["output_dir"], "proof_renders")
+            display_simulation_window(proof_p, scene_name=scene_name)
 
     if args.serve:
         from luther_web.server import start_server

@@ -169,3 +169,57 @@ def load_colmap_model(sparse_dir: str, images_dir: Optional[str] = None) -> Tupl
 
     logger.info(f"Loaded COLMAP model: {len(cameras)} cameras, {len(views)} image poses, {len(pcd)} 3D points.")
     return cameras, views, pcd
+
+
+def export_colmap_sparse(
+    output_dir: str,
+    cameras: Dict[int, CameraIntrinsics],
+    views: Dict[int, CameraView],
+    pcd: PointCloud
+) -> str:
+    """
+    Exports reconstructed camera intrinsics, camera extrinsics, and 3D point cloud
+    into a standard COLMAP-compatible sparse/0 directory with both text and binary formats.
+    """
+    sparse_0_dir = os.path.join(output_dir, "sparse", "0")
+    os.makedirs(sparse_0_dir, exist_ok=True)
+
+    # 1. Export cameras.txt
+    cam_txt_path = os.path.join(sparse_0_dir, "cameras.txt")
+    with open(cam_txt_path, "w", encoding="utf-8") as f:
+        f.write("# Camera list with one line of data per camera:\n")
+        f.write("#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
+        f.write(f"# Number of cameras: {len(cameras)}\n")
+        for cid, cam in cameras.items():
+            f.write(f"{cid} PINHOLE {cam.width} {cam.height} {cam.fx:.6f} {cam.fy:.6f} {cam.cx:.6f} {cam.cy:.6f}\n")
+
+    # 2. Export images.txt
+    img_txt_path = os.path.join(sparse_0_dir, "images.txt")
+    with open(img_txt_path, "w", encoding="utf-8") as f:
+        f.write("# Image list with two lines of data per image:\n")
+        f.write("#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n")
+        f.write("#   POINTS2D[] as (X, Y, POINT3D_ID)\n")
+        f.write(f"# Number of images: {len(views)}\n")
+        for iid, v in views.items():
+            qw, qx, qy, qz = v.qvec[0], v.qvec[1], v.qvec[2], v.qvec[3]
+            tx, ty, tz = v.tvec[0], v.tvec[1], v.tvec[2]
+            f.write(f"{iid} {qw:.8f} {qx:.8f} {qy:.8f} {qz:.8f} {tx:.8f} {ty:.8f} {tz:.8f} 1 {v.name}\n")
+            f.write("\n")
+
+    # 3. Export points3D.txt
+    pts_txt_path = os.path.join(sparse_0_dir, "points3D.txt")
+    with open(pts_txt_path, "w", encoding="utf-8") as f:
+        f.write("# 3D point list with one line of data per point:\n")
+        f.write("#   POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[] as (IMAGE_ID, POINT2D_IDX)\n")
+        f.write(f"# Number of points: {len(pcd.positions)}\n")
+        cols = pcd.colors
+        if cols.max() <= 1.05 and cols.dtype != np.uint8:
+            cols = (cols * 255.0).astype(np.uint8)
+        for pid in range(len(pcd.positions)):
+            pos = pcd.positions[pid]
+            col = cols[pid] if pid < len(cols) else [128, 128, 128]
+            f.write(f"{pid + 1} {pos[0]:.6f} {pos[1]:.6f} {pos[2]:.6f} {int(col[0])} {int(col[1])} {int(col[2])} 1.0\n")
+
+    logger.info(f"Exported self-generated sparse model to '{sparse_0_dir}' ({len(views)} cameras, {len(pcd.positions):,} 3D points).")
+    return sparse_0_dir
+

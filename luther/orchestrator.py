@@ -102,11 +102,15 @@ def run_pipeline(dataset_dir: str, out_dir: str = "output", max_ram_gb: float = 
 
 def main():
     parser = argparse.ArgumentParser(description="lutherICPU Forensic 3D Reconstruction Master Engine")
-    parser.add_argument("--dataset", type=str, default="F:/tandt_db/tandt/truck", help="Path to input COLMAP/Images dataset")
+    parser.add_argument("--dataset", type=str, default=None, help="Path to input COLMAP/Images dataset (Required)")
     parser.add_argument("--out_dir", type=str, default="output", help="Output directory for 3D assets and reports")
     parser.add_argument("--max_ram_gb", type=float, default=3.2, help="Peak RAM safety limit")
     args = parser.parse_args()
     
+    if not args.dataset:
+        print("[ERROR] Please provide --dataset <path_to_images_or_colmap_folder>")
+        sys.exit(1)
+        
     run_pipeline(args.dataset, args.out_dir, args.max_ram_gb)
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ ENV/
 output/
 uploads/
 scratch/*.png
+scratch/*.jpg
 
 # IDE and Editor files
 .vscode/

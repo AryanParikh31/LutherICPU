@@ -227,7 +227,20 @@ def get_cameras(scene_id: str = "default"):
 @app.get("/api/scene/glb")
 def get_scene_glb(scene_id: str = "default"):
     """Returns the 4K photorealistic UV-textured 3D GLB model."""
-    candidates = [f"{scene_id}_textured.glb", "scene_textured.glb", f"{scene_id}_simulation.glb", "truck_simulation.glb"]
+    manifest = get_latest_simulation_manifest()
+    if manifest and manifest.get("glb_path") and os.path.exists(manifest["glb_path"]):
+        return FileResponse(manifest["glb_path"], media_type="model/gltf-binary")
+
+    candidates = [
+        f"{scene_id}_simulation.glb",
+        f"{scene_id}_textured.glb",
+        "truck_photos_simulation.glb",
+        "truck_photos_textured.glb",
+        "truck_simulation.glb",
+        "truck_textured.glb",
+        "scene_textured.glb",
+        "playroom_simulation.glb"
+    ]
     p = find_asset_file(candidates)
     if p and os.path.exists(p):
         return FileResponse(p, media_type="model/gltf-binary")
@@ -245,6 +258,7 @@ def get_scene_obj(scene_id: str = "default"):
         "scene_textured.obj",
         f"{scene_id}_mesh.obj",
         "truck_mesh.obj",
+        "playroom_simulation.obj",
         "scene_forensic.obj"
     ]
     p = find_asset_file(candidates, asset_type="obj_path")
@@ -264,12 +278,67 @@ def get_scene_mtl(scene_id: str = "default"):
         "scene_textured.mtl",
         f"{scene_id}_mesh.mtl",
         "truck_mesh.mtl",
+        "playroom_simulation.mtl",
         "scene_forensic.mtl"
     ]
     p = find_asset_file(candidates, asset_type="mtl_path")
     if p and os.path.exists(p):
         return FileResponse(p, media_type="text/plain")
     raise HTTPException(status_code=404, detail="MTL definition not found.")
+
+
+@app.get("/api/scene/splat")
+@app.get("/api/scene/{scene_id}/splat")
+def get_scene_splat_buffer(scene_id: str = "default"):
+    """Returns direct GPU-ready 3D Gaussian Splat binary (.splat) buffer for real-time 60 FPS WebGL2 rendering."""
+    manifest = get_latest_simulation_manifest()
+    if manifest and manifest.get("splat_path") and os.path.exists(manifest["splat_path"]):
+        return FileResponse(manifest["splat_path"], media_type="application/octet-stream")
+
+    candidates = [
+        f"{scene_id}_3dgs.splat",
+        "truck_photos_3dgs.splat",
+        "truck_3dgs.splat",
+        "scene.splat",
+        "playroom_3dgs.splat",
+        f"{scene_id}.splat"
+    ]
+    p = find_asset_file(candidates, asset_type="splat_path")
+    if p and os.path.exists(p):
+        return FileResponse(p, media_type="application/octet-stream")
+    
+    # If no .splat file exists yet, check if .ply exists and convert on the fly
+    ply_cand = [f"{scene_id}_3dgs.ply", "truck_photos_3dgs.ply", "truck_3dgs.ply", f"{scene_id}_dense.ply", "truck_photos_dense.ply", "playroom_3dgs.ply"]
+    p_ply = find_asset_file(ply_cand, asset_type="ply_3dgs_path")
+    if p_ply and os.path.exists(p_ply):
+        return FileResponse(p_ply, media_type="application/octet-stream")
+    raise HTTPException(status_code=404, detail="3D Gaussian Splat asset not found.")
+
+
+@app.get("/api/scene/ply_3dgs")
+@app.get("/api/scene/{scene_id}/ply_3dgs")
+@app.get("/api/scene/pointcloud")
+@app.get("/api/scene/{scene_id}/pointcloud")
+def get_scene_3dgs_ply(scene_id: str = "default"):
+    """Returns standard Inria 3D Gaussian Splatting binary PLY."""
+    manifest = get_latest_simulation_manifest()
+    if manifest and manifest.get("ply_3dgs_path") and os.path.exists(manifest["ply_3dgs_path"]):
+        return FileResponse(manifest["ply_3dgs_path"], media_type="application/octet-stream")
+
+    candidates = [
+        f"{scene_id}_3dgs.ply",
+        "truck_photos_3dgs.ply",
+        "truck_3dgs.ply",
+        "point_cloud/iteration_30000/point_cloud.ply",
+        "point_cloud/iteration_7000/point_cloud.ply",
+        f"{scene_id}_dense.ply",
+        "truck_photos_dense.ply",
+        "playroom_3dgs.ply"
+    ]
+    p = find_asset_file(candidates, asset_type="ply_3dgs_path")
+    if p and os.path.exists(p):
+        return FileResponse(p, media_type="application/octet-stream")
+    raise HTTPException(status_code=404, detail="3D Gaussian Splatting PLY not found.")
 
 
 @app.get("/api/scene/binary")
@@ -279,6 +348,8 @@ def get_scene_mtl(scene_id: str = "default"):
 def get_scene_packed_buffer(scene_id: str = "default"):
     """Returns direct GPU-ready packed binary buffer for instant <15ms WebGL rendering."""
     candidates = [
+        f"{scene_id}_3dgs.splat",
+        "truck_photos_3dgs.splat",
         f"{scene_id}_simulation.bin",
         "truck_photos_simulation.bin",
         "truck_simulation.bin",
@@ -350,28 +421,74 @@ def get_scene_data(scene_name: str):
 
 
 @app.get("/photo/{image_name}")
-def get_source_photo(image_name: str):
-    """Serves source photos for ground-truth inspection & split screen."""
-    raw_dirs = [
-        os.path.join(WORKSPACE_ROOT, "uploads", "truck_photos", "images"),
-        r"F:\tandt_db\tandt\truck\images",
-        os.path.join(OUTPUT_DIR, "ref_frames"),
-        os.path.join(WORKSPACE_ROOT, "uploads"),
-    ]
-    for d in raw_dirs:
-        p = os.path.join(d, image_name)
-        if os.path.exists(p):
-            return FileResponse(p, media_type="image/jpeg")
-    found = glob.glob(os.path.join(WORKSPACE_ROOT, "uploads", "**", image_name), recursive=True)
-    if found:
-        return FileResponse(found[0], media_type="image/jpeg")
-    all_photos = glob.glob(os.path.join(WORKSPACE_ROOT, "uploads", "**", "*.jpg"), recursive=True)
-    if all_photos:
-        return FileResponse(all_photos[0], media_type="image/jpeg")
-    proof = find_asset_file(["truck_photos_simulation_1080p_hero.png", "truck_simulation_1080p_hero.png"])
+@app.get("/api/scene/reference_photo")
+@app.get("/api/scene/reference_photo/{image_name}")
+@app.get("/api/scene/{scene_id}/reference_photo")
+@app.get("/api/scene/{scene_id}/reference_photo/{image_name}")
+def get_source_photo(image_name: Optional[str] = None, scene_id: str = "default"):
+    """Serves user-provided source photos dynamically for ground-truth inspection."""
+    # 1. Retrieve user-provided images path dynamically from simulation manifest
+    manifest = get_latest_simulation_manifest()
+    search_dirs = []
+    
+    if manifest:
+        user_img_path = manifest.get("images_path") or manifest.get("source_images_path")
+        if user_img_path and os.path.exists(user_img_path):
+            search_dirs.append(user_img_path)
+            
+        sim_dir = manifest.get("output_dir")
+        if sim_dir and os.path.exists(sim_dir):
+            search_dirs.append(sim_dir)
+            search_dirs.append(os.path.join(sim_dir, "ref_frames"))
+
+    # Also check scene-specific JSON manifest if requested scene_id differs
+    if scene_id and scene_id != "default":
+        scene_json = find_asset_file([f"{scene_id}_scene.json"], asset_type="scene_json_path")
+        if scene_json and os.path.exists(scene_json):
+            try:
+                with open(scene_json, "r") as f:
+                    sc_data = json.load(f)
+                    sc_img_path = sc_data.get("images_path") or sc_data.get("source_images_path")
+                    if sc_img_path and os.path.exists(sc_img_path) and sc_img_path not in search_dirs:
+                        search_dirs.insert(0, sc_img_path)
+            except Exception:
+                pass
+
+    # Generic workspace uploads fallback
+    uploads_dir = os.path.join(WORKSPACE_ROOT, "uploads")
+    if os.path.exists(uploads_dir) and uploads_dir not in search_dirs:
+        search_dirs.append(uploads_dir)
+
+    candidates = []
+    if image_name and image_name != "default":
+        candidates.append(image_name)
+        if not image_name.lower().endswith((".jpg", ".png", ".jpeg")):
+            candidates.append(f"{image_name}.jpg")
+            candidates.append(f"{image_name}.png")
+
+    for cand in candidates:
+        for d in search_dirs:
+            p = os.path.join(d, cand)
+            if os.path.exists(p):
+                return FileResponse(p, media_type="image/jpeg" if cand.lower().endswith(".jpg") else "image/png")
+
+    # If no specific image requested or candidate not found, serve hero render or first image in dynamic folder
+    if manifest and manifest.get("output_dir"):
+        sim_dir = manifest["output_dir"]
+        hero_png = os.path.join(sim_dir, f"{manifest.get('scene_name', '')}_simulation_1080p_hero.png")
+        if os.path.exists(hero_png):
+            return FileResponse(hero_png, media_type="image/png")
+
+    for d in search_dirs:
+        if os.path.exists(d):
+            photos = glob.glob(os.path.join(d, "*.jpg")) + glob.glob(os.path.join(d, "*.png"))
+            if photos:
+                return FileResponse(photos[0], media_type="image/jpeg" if photos[0].lower().endswith(".jpg") else "image/png")
+
+    proof = find_asset_file(["playroom_simulation_1080p_hero.png", "truck_simulation_1080p_hero.png"])
     if proof and os.path.exists(proof):
         return FileResponse(proof, media_type="image/png")
-    raise HTTPException(status_code=404, detail=f"Photo '{image_name}' not found.")
+    raise HTTPException(status_code=404, detail="Reference photo not found in user-specified dataset.")
 
 
 @app.get("/api/scene_binary/{scene_name}")

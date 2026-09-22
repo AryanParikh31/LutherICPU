@@ -21,8 +21,8 @@ from luther.forensic.caliper import (
     moller_trumbore_ray_triangle_intersect
 )
 
-DATASET_PATH = "F:/tandt_db/tandt/truck" if os.path.exists("F:/tandt_db/tandt/truck/sparse/0") else "uploads/truck_photos"
-OUT_DIR = "output"
+DATASET_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads", "truck_photos")
+OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
 
 @pytest.fixture(scope="module")
 def reconstructed_assets():

@@ -3,17 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>INRIA SIBR - CPU-Native 3D Gaussian Simulation Engine (Forensic 4K)</title>
+  <title>INRIA SIBR — 3D Gaussian Splatting Interactive Viewer</title>
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <!-- Three.js and Loaders -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Three.js & Loaders -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <style>
     * {
       box-sizing: border-box;
@@ -25,9 +24,9 @@
       width: 100vw;
       height: 100vh;
       overflow: hidden;
-      background-color: #05070a;
-      font-family: 'Inter', sans-serif;
-      color: #f1f5f9;
+      background-color: #030712;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #f8fafc;
     }
     #sim-canvas {
       width: 100vw;
@@ -40,310 +39,195 @@
       cursor: grabbing;
     }
 
-    /* Minimalist Top HUD Bar */
-    .top-badge {
+    /* Minimalist Authentic SIBR Top Status HUD */
+    .sibr-top-hud {
       position: absolute;
-      top: 1.25rem;
-      left: 1.25rem;
+      top: 1rem;
+      left: 1rem;
       display: flex;
       align-items: center;
-      gap: 0.75rem;
-      background: rgba(10, 15, 26, 0.85);
+      gap: 0.65rem;
+      background: rgba(10, 15, 29, 0.78);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(0, 240, 255, 0.25);
+      border: 1px solid rgba(0, 240, 255, 0.28);
       border-radius: 9999px;
-      padding: 0.5rem 1.1rem;
-      font-size: 0.82rem;
+      padding: 0.45rem 1rem;
+      font-size: 0.8rem;
       font-weight: 500;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
       z-index: 100;
       pointer-events: auto;
+      transition: opacity 0.3s ease;
     }
     .pulse-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #10b981;
-      box-shadow: 0 0 12px #10b981;
-      animation: pulse 2s infinite;
+      background: #00f0ff;
+      box-shadow: 0 0 12px #00f0ff;
+      animation: sibr-pulse 2s infinite;
     }
-    @keyframes pulse {
+    @keyframes sibr-pulse {
       0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
+      50% { opacity: 0.35; transform: scale(0.8); }
     }
-    .badge-sep {
+    .hud-sep {
       color: rgba(255, 255, 255, 0.2);
     }
-    .badge-hl {
+    .hud-val {
       color: #00f0ff;
       font-family: 'JetBrains Mono', monospace;
       font-weight: 600;
     }
+    .hud-label {
+      color: #94a3b8;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
 
-    /* Floating Toggle Button (Top-Right) */
-    .btn-toggle-panel {
+    /* Discreet Top-Right Action Badges */
+    .sibr-top-actions {
       position: absolute;
-      top: 1.25rem;
-      right: 1.25rem;
+      top: 1rem;
+      right: 1rem;
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      background: rgba(15, 23, 42, 0.85);
+      z-index: 100;
+    }
+    .sibr-btn-pill {
+      background: rgba(10, 15, 29, 0.78);
       backdrop-filter: blur(16px);
-      border: 1px solid rgba(0, 240, 255, 0.35);
-      color: #f8fafc;
-      padding: 0.6rem 1.2rem;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #cbd5e1;
+      padding: 0.45rem 0.85rem;
       border-radius: 9999px;
-      font-size: 0.85rem;
+      font-size: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
       font-weight: 600;
       cursor: pointer;
-      box-shadow: 0 8px 24px rgba(0, 240, 255, 0.18);
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-      z-index: 110;
-    }
-    .btn-toggle-panel:hover {
-      background: rgba(0, 240, 255, 0.18);
-      border-color: #00f0ff;
-      transform: translateY(-2px);
-      box-shadow: 0 12px 28px rgba(0, 240, 255, 0.32);
-    }
-
-    /* SIBR DOCKED TOOLBAR PANEL (Left Dock) */
-    .sibr-panel {
-      position: absolute;
-      top: 4.8rem;
-      left: 1.25rem;
-      width: 320px;
-      max-height: calc(100vh - 6.5rem);
-      overflow-y: auto;
-      background: rgba(11, 17, 30, 0.94);
-      backdrop-filter: blur(24px);
-      -webkit-backdrop-filter: blur(24px);
-      border: 1px solid rgba(0, 240, 255, 0.25);
-      border-radius: 1.2rem;
-      padding: 1.25rem;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85);
-      z-index: 105;
-      transition: all 0.3s ease;
-    }
-    .sibr-header {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      margin-bottom: 1rem;
-      padding-bottom: 0.75rem;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      gap: 0.35rem;
+      transition: all 0.2s ease;
     }
-    .sibr-logo {
-      font-family: 'JetBrains Mono', monospace;
-      font-weight: 700;
-      font-size: 1.05rem;
-      color: #00f0ff;
-      letter-spacing: 0.05em;
+    .sibr-btn-pill:hover {
+      background: rgba(0, 240, 255, 0.18);
+      border-color: #00f0ff;
+      color: #ffffff;
+      transform: translateY(-1px);
     }
-    .sibr-badge {
-      background: rgba(0, 240, 255, 0.15);
-      border: 1px solid #00f0ff;
+    .sibr-btn-pill.active {
+      background: rgba(0, 240, 255, 0.25);
+      border-color: #00f0ff;
       color: #00f0ff;
-      font-size: 0.65rem;
-      font-family: 'JetBrains Mono', monospace;
-      padding: 0.15rem 0.5rem;
+    }
+
+    /* SIBR Mode Quick Selector (Bottom Center Pill) */
+    .sibr-mode-bar {
+      position: absolute;
+      bottom: 1.25rem;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      background: rgba(10, 15, 29, 0.82);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(0, 240, 255, 0.25);
       border-radius: 9999px;
-      font-weight: 600;
+      padding: 0.35rem 0.5rem;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7);
+      z-index: 100;
     }
-    .sibr-section-title {
-      font-size: 0.7rem;
-      font-weight: 700;
+    .sibr-mode-tab {
+      background: transparent;
+      border: 1px solid transparent;
       color: #94a3b8;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-top: 1rem;
-      margin-bottom: 0.5rem;
-    }
-    .sibr-btn-group {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.4rem;
-      margin-bottom: 0.5rem;
-    }
-    .sibr-btn {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: #cbd5e1;
-      padding: 0.5rem 0.4rem;
-      border-radius: 0.5rem;
+      padding: 0.4rem 0.85rem;
+      border-radius: 9999px;
       font-size: 0.75rem;
       font-weight: 600;
       cursor: pointer;
-      text-align: center;
-      transition: all 0.2s ease;
-    }
-    .sibr-btn:hover {
-      background: rgba(0, 240, 255, 0.12);
-      border-color: #00f0ff;
-      color: #ffffff;
-    }
-    .sibr-btn.active {
-      background: linear-gradient(135deg, rgba(0, 240, 255, 0.3), rgba(168, 85, 247, 0.3));
-      border-color: #00f0ff;
-      color: #00f0ff;
-    }
-    .sibr-toggle-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      padding: 0.5rem 0;
-      font-size: 0.78rem;
-      color: #e2e8f0;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    }
-    .sibr-toggle-row input[type="checkbox"] {
-      width: 18px;
-      height: 18px;
-      accent-color: #00f0ff;
-      cursor: pointer;
-    }
-    .sibr-btn-action {
-      width: 100%;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: #e2e8f0;
-      padding: 0.55rem 0.75rem;
-      border-radius: 0.5rem;
-      font-size: 0.8rem;
-      font-weight: 600;
-      cursor: pointer;
-      margin-bottom: 0.4rem;
-      text-align: left;
+      gap: 0.35rem;
       transition: all 0.2s ease;
     }
-    .sibr-btn-action:hover {
-      background: rgba(0, 240, 255, 0.15);
-      border-color: #00f0ff;
+    .sibr-mode-tab:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .sibr-mode-tab.active {
       color: #00f0ff;
-      transform: translateX(3px);
+      background: rgba(0, 240, 255, 0.18);
+      border-color: rgba(0, 240, 255, 0.4);
+      box-shadow: 0 0 12px rgba(0, 240, 255, 0.2);
     }
 
-    /* Quick Bottom Toolbar */
-    .bottom-toolbar {
-      position: absolute;
-      bottom: 1.5rem;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      background: rgba(10, 15, 26, 0.85);
-      backdrop-filter: blur(20px);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 9999px;
-      padding: 0.45rem 0.8rem;
-      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6);
-      z-index: 100;
-    }
-    .tool-btn {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: #cbd5e1;
-      padding: 0.5rem 0.95rem;
-      border-radius: 9999px;
-      font-size: 0.8rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.2s ease;
-    }
-    .tool-btn:hover {
-      background: rgba(255, 255, 255, 0.14);
-      color: #ffffff;
-      border-color: rgba(255, 255, 255, 0.25);
-    }
-    .tool-btn.active {
-      background: linear-gradient(135deg, rgba(0, 240, 255, 0.25), rgba(168, 85, 247, 0.25));
-      border-color: #00f0ff;
-      color: #00f0ff;
-    }
-
-    /* SIBR GROUND TRUTH SPLIT-SCREEN COMPARISON SLIDER */
-    #split-screen-container {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      pointer-events: none;
-      z-index: 80;
-    }
-    #gt-image-overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background-image: url('/photo/000008.jpg');
-      background-size: cover;
-      background-position: center;
-      background-repeat: no-repeat;
-      clip-path: polygon(0 0, 50% 0, 50% 100%, 0 100%);
-      transition: none;
-    }
-    #split-slider-bar {
-      position: absolute;
-      top: 0;
-      left: 50%;
-      width: 4px;
-      height: 100vh;
-      background: #00f0ff;
-      box-shadow: 0 0 12px #00f0ff, 0 0 24px rgba(0, 240, 255, 0.5);
-      cursor: ew-resize;
-      pointer-events: auto;
-      transform: translateX(-50%);
-    }
-    #split-slider-bar::after {
-      content: '↔';
+    /* SIBR Help / Keybindings Modal */
+    #sibr-help-modal {
       position: absolute;
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      width: 32px;
-      height: 32px;
-      background: #080c14;
-      border: 2px solid #00f0ff;
-      color: #00f0ff;
-      border-radius: 50%;
+      width: 440px;
+      max-width: 90vw;
+      background: rgba(10, 15, 29, 0.96);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid rgba(0, 240, 255, 0.35);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.85), 0 0 30px rgba(0, 240, 255, 0.15);
+      z-index: 200;
+      display: none;
+    }
+    .help-header {
       display: flex;
       align-items: center;
-      justify-content: center;
-      font-size: 14px;
+      justify-content: space-between;
+      margin-bottom: 1.2rem;
+      padding-bottom: 0.6rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .help-title {
+      font-family: 'JetBrains Mono', monospace;
       font-weight: 700;
-      box-shadow: 0 0 16px rgba(0, 240, 255, 0.6);
-    }
-    .split-label-left {
-      position: absolute;
-      bottom: 2rem;
-      left: 2rem;
-      background: rgba(0, 0, 0, 0.75);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      color: #f1f5f9;
-      padding: 0.4rem 0.8rem;
-      border-radius: 0.5rem;
-      font-size: 0.75rem;
-      font-family: 'JetBrains Mono', monospace;
-    }
-    .split-label-right {
-      position: absolute;
-      bottom: 2rem;
-      right: 2rem;
-      background: rgba(0, 240, 255, 0.2);
-      border: 1px solid #00f0ff;
+      font-size: 0.95rem;
       color: #00f0ff;
-      padding: 0.4rem 0.8rem;
-      border-radius: 0.5rem;
-      font-size: 0.75rem;
+    }
+    .help-close {
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      font-size: 1.2rem;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .help-close:hover {
+      color: #ffffff;
+    }
+    .help-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.45rem 0;
+      font-size: 0.78rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .key-badge {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #00f0ff;
       font-family: 'JetBrains Mono', monospace;
+      padding: 0.15rem 0.45rem;
+      border-radius: 0.3rem;
+      font-size: 0.72rem;
+      font-weight: 600;
     }
 
     /* Loading Overlay */
@@ -351,14 +235,14 @@
       position: absolute;
       top: 0; left: 0;
       width: 100vw; height: 100vh;
-      background: #05070a;
+      background: #030712;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 1rem;
+      gap: 1.2rem;
       z-index: 1000;
-      transition: opacity 0.5s ease;
+      transition: opacity 0.4s ease;
     }
     .spinner {
       width: 48px;
@@ -377,82 +261,127 @@
   <!-- Loading Screen -->
   <div id="loading-overlay">
     <div class="spinner"></div>
-    <div style="font-size: 0.95rem; font-weight: 600; color: #f8fafc; letter-spacing: 0.05em;">
-      INRIA SIBR // INGESTING 3D GAUSSIANS...
+    <div style="font-size: 1rem; font-weight: 600; color: #f8fafc; letter-spacing: 0.06em;">
+      INRIA SIBR // STREAMING 3D GAUSSIAN RADIANCE FIELD...
     </div>
-    <div style="font-size: 0.75rem; color: #94a3b8; font-family: 'JetBrains Mono', monospace;">
-      Pure CPU Eigendecomposition & WebGL2 Micro-Surfel Shaders
+    <div id="loading-status" style="font-size: 0.78rem; color: #94a3b8; font-family: 'JetBrains Mono', monospace;">
+      Connecting to Pure CPU Reconstructor Engine
     </div>
   </div>
 
-  <!-- Top Status Badge -->
-  <div class="top-badge">
+  <!-- Minimalist Authentic SIBR Top HUD -->
+  <div class="sibr-top-hud" id="sibr-top-hud">
     <div class="pulse-dot"></div>
-    <span style="font-weight: 700; color: #f8fafc;">SIBR 3DGS</span>
-    <span class="badge-sep">|</span>
-    <span id="badge-surfel-count" class="badge-hl">3,767,684 Surfels</span>
-    <span class="badge-sep">|</span>
-    <span id="badge-fps" class="badge-hl">60 FPS</span>
+    <span style="font-weight: 700; color: #f8fafc; letter-spacing: 0.04em;">INRIA SIBR</span>
+    <span class="hud-sep">|</span>
+    <span id="badge-scene-name" class="hud-val">SCENE</span>
+    <span class="hud-sep">|</span>
+    <span id="badge-surfel-count" class="hud-val">500k Splats</span>
+    <span class="hud-sep">|</span>
+    <span id="badge-fps" class="hud-val">60 FPS</span>
+    <span class="hud-sep">|</span>
+    <span class="hud-label">Nav:</span>
+    <span id="badge-nav-mode" class="hud-val">Trackball</span>
+    <span class="hud-sep">|</span>
+    <span class="hud-label">Cam:</span>
+    <span id="badge-cam-id" class="hud-val">Hero</span>
   </div>
 
-  <!-- SIBR DOCKED TOOLBAR PANEL -->
-  <div id="sibr-dock-panel" class="sibr-panel">
-    <div class="sibr-header">
-      <span class="sibr-logo">SIBR // CORE</span>
-      <span class="sibr-badge">CPU-NATIVE</span>
-    </div>
-
-    <div class="sibr-section-title">RENDERING MODES</div>
-    <div class="sibr-btn-group">
-      <button id="btn-mode-0" class="sibr-btn active" onclick="setRenderMode(0)">RGB Radiance</button>
-      <button id="btn-mode-1" class="sibr-btn" onclick="setRenderMode(1)">Optical Depth</button>
-      <button id="btn-mode-2" class="sibr-btn" onclick="setRenderMode(2)">Surface Normals</button>
-      <button id="btn-mode-3" class="sibr-btn" onclick="setRenderMode(3)">Conic Footprints</button>
-    </div>
-
-    <div class="sibr-section-title">INSPECTION & CAMERAS</div>
-    <div class="sibr-toggle-row">
-      <label for="toggle-solid">Solid 4K Textured Mesh</label>
-      <input type="checkbox" id="toggle-solid" checked onchange="toggleSolidMeshMode(this.checked)">
-    </div>
-    <div class="sibr-toggle-row">
-      <label for="toggle-cameras">Show 251 Camera Frustums</label>
-      <input type="checkbox" id="toggle-cameras" onchange="toggleCameraFrustums(this.checked)">
-    </div>
-    <div class="sibr-toggle-row">
-      <label for="toggle-split">Ground Truth Split-Screen</label>
-      <input type="checkbox" id="toggle-split" onchange="toggleSplitScreen(this.checked)">
-    </div>
-
-    <div class="sibr-section-title">CAMERA BENCHMARKS</div>
-    <button class="sibr-btn-action" onclick="loadPose('side')">🚚 SIBR Side Profile (Photo 008)</button>
-    <button class="sibr-btn-action" onclick="loadPose('hero')">📸 Hero 3/4 Perspective</button>
-    <button class="sibr-btn-action" onclick="loadPose('cabin')">🔍 Interior Cabin & Wheel</button>
-    <button class="sibr-btn-action" onclick="toggleTurntable()">🎬 360° Turntable Orbit</button>
+  <!-- Discreet Top-Right Action Buttons -->
+  <div class="sibr-top-actions">
+    <button class="sibr-btn-pill" onclick="toggleTurntable()" title="360° Continuous Orbit (Key: O)">
+      <span>🎬</span>
+      <span id="btn-orbit-label">Orbit 360°</span>
+    </button>
+    <button class="sibr-btn-pill" onclick="nextCameraPose()" title="Snap to Next Calibrated Camera (Key: Space / C)">
+      <span>📸</span>
+      <span>Next Cam</span>
+    </button>
+    <button class="sibr-btn-pill" onclick="toggleNavMode()" title="Toggle Trackball / FPS Navigation (Key: Y)">
+      <span>🕹️</span>
+      <span id="btn-nav-label">FPS Mode</span>
+    </button>
+    <button class="sibr-btn-pill" onclick="toggleHelpModal()" title="Help & Shortcuts (Key: H / ?)">
+      <span>⌨️</span>
+      <span>Keys</span>
+    </button>
   </div>
 
-  <!-- Bottom Quick Controls -->
-  <div class="bottom-toolbar">
-    <button id="btn-toggle-mesh" class="tool-btn active" onclick="toggleSolidMeshMode()">🧱 4K Mesh</button>
-    <button class="tool-btn" onclick="loadPose('side')">🚚 Side</button>
-    <button class="tool-btn" onclick="loadPose('hero')">📸 Hero</button>
-    <button class="tool-btn" onclick="toggleTurntable()">🎬 360° Orbit</button>
-    <button class="tool-btn" onclick="resetCamera()">🔄 Reset</button>
+  <!-- Minimalist SIBR Bottom Mode Tabs -->
+  <div class="sibr-mode-bar">
+    <button id="tab-mode-0" class="sibr-mode-tab active" onclick="setRenderMode(0)">⚡ Radiance [1]</button>
+    <button id="tab-mode-1" class="sibr-mode-tab" onclick="setRenderMode(1)">🌊 Depth [2]</button>
+    <button id="tab-mode-2" class="sibr-mode-tab" onclick="setRenderMode(2)">🧭 Normals [3]</button>
+    <button id="tab-mode-3" class="sibr-mode-tab" onclick="setRenderMode(3)">📐 Conics [4]</button>
+    <button id="tab-mode-4" class="sibr-mode-tab" onclick="setRenderMode(4)">🏛️ Mesh [5]</button>
+    <button class="sibr-mode-tab" onclick="resetCamera()" style="margin-left: 0.25rem;">🔄 Reset [R]</button>
   </div>
 
-  <!-- SIBR SPLIT-SCREEN COMPARISON SLIDER (Disabled by default) -->
-  <div id="split-screen-container" style="display: none;">
-    <div id="gt-image-overlay"></div>
-    <div id="split-slider-bar"></div>
-    <div class="split-label-left">📷 Ground Truth Photo 000008.jpg</div>
-    <div class="split-label-right">⚡ Live 3D Gaussian Splatting</div>
+  <!-- Ground-Truth Reference Photo Peek (Toggle: G) -->
+  <div id="gt-peek-container" style="position: absolute; bottom: 4.5rem; right: 1rem; width: 220px; background: rgba(10, 15, 29, 0.88); border: 1px solid rgba(0, 240, 255, 0.3); border-radius: 0.75rem; padding: 0.5rem; box-shadow: 0 10px 30px rgba(0,0,0,0.7); display: none; z-index: 100; backdrop-filter: blur(12px);">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.35rem; font-size: 0.7rem; font-family: 'JetBrains Mono', monospace; color: #00f0ff; font-weight: 600;">
+      <span>GT REFERENCE [G]</span>
+      <button onclick="toggleGTPeek()" style="background:none; border:none; color:#94a3b8; cursor:pointer; font-size: 0.8rem;">✕</button>
+    </div>
+    <img id="gt-reference-photo" src="/api/scene/reference_photo" alt="Ground Truth Camera Photo" style="width: 100%; border-radius: 0.4rem; display: block; border: 1px solid rgba(255,255,255,0.1);">
+  </div>
+
+  <!-- SIBR Keybindings Modal -->
+  <div id="sibr-help-modal">
+    <div class="help-header">
+      <span class="help-title">SIBR // KEYBOARD SHORTCUTS</span>
+      <button class="help-close" onclick="toggleHelpModal()">✕</button>
+    </div>
+    <div class="help-row">
+      <span>Orbit Viewport (Trackball)</span>
+      <span class="key-badge">Left-Click + Drag</span>
+    </div>
+    <div class="help-row">
+      <span>Pan Viewport</span>
+      <span class="key-badge">Right-Click / Middle-Click</span>
+    </div>
+    <div class="help-row">
+      <span>Zoom In / Out</span>
+      <span class="key-badge">Mouse Wheel</span>
+    </div>
+    <div class="help-row">
+      <span>Fly Mode Movement (FPS)</span>
+      <span class="key-badge">W / A / S / D</span>
+    </div>
+    <div class="help-row">
+      <span>Fly Vertical Elevation</span>
+      <span class="key-badge">Q / E</span>
+    </div>
+    <div class="help-row">
+      <span>Toggle Trackball / FPS Mode</span>
+      <span class="key-badge">Y</span>
+    </div>
+    <div class="help-row">
+      <span>Snap Next Calibrated Camera</span>
+      <span class="key-badge">Space / C</span>
+    </div>
+    <div class="help-row">
+      <span>Switch Render Mode</span>
+      <span class="key-badge">1 / 2 / 3 / 4</span>
+    </div>
+    <div class="help-row">
+      <span>Toggle 360° Turntable Orbit</span>
+      <span class="key-badge">O</span>
+    </div>
+    <div class="help-row">
+      <span>Reset Viewport Camera</span>
+      <span class="key-badge">R</span>
+    </div>
+    <div class="help-row">
+      <span>Toggle HUD Display</span>
+      <span class="key-badge">H</span>
+    </div>
   </div>
 
   <!-- Fullscreen WebGL Canvas -->
   <canvas id="sim-canvas"></canvas>
 
-  <script src="/js/sorter.js?v=5"></script>
-  <script src="/js/mesh_renderer.js?v=5"></script>
-  <script src="/js/simulation.js?v=5"></script>
+  <script src="/js/sort_worker.js?v=10"></script>
+  <script src="/js/simulation.js?v=10"></script>
 </body>
 </html>

@@ -22,26 +22,58 @@ from luther_renderer.display_window import display_simulation_window
 
 
 def launch_interactive_3d_viewport(port: int = 8080):
-    """Launches the 60 FPS hardware-accelerated interactive 3D SIBR simulation viewport."""
-    from luther_web.server import app
+    """Launches the 60 FPS hardware-accelerated interactive 3D SIBR simulation viewport in a native desktop window."""
+    import socket
     import uvicorn
     import webbrowser
+    from luther_web.server import app
 
-    def run_srv():
-        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-        server = uvicorn.Server(config)
-        server.run()
+    # Robust port binding check
+    def is_port_in_use(p: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('127.0.0.1', p)) == 0
 
-    thread = threading.Thread(target=run_srv, daemon=True)
-    thread.start()
-    time.sleep(1.0)
+    active_port = port
+    if is_port_in_use(active_port):
+        # Check if it's already responding to our telemetry endpoint
+        try:
+            import urllib.request
+            req = urllib.request.urlopen(f"http://127.0.0.1:{active_port}/api/telemetry", timeout=0.8)
+            if req.status == 200:
+                print(f"[*] Connected to existing lutherICPU simulation server on port {active_port}.")
+            else:
+                for p_cand in range(8081, 8095):
+                    if not is_port_in_use(p_cand):
+                        active_port = p_cand
+                        break
+        except Exception:
+            for p_cand in range(8081, 8095):
+                if not is_port_in_use(p_cand):
+                    active_port = p_cand
+                    break
 
-    url = f"http://127.0.0.1:{port}/simulation"
+    # Start server if not already responding
+    try:
+        import urllib.request
+        urllib.request.urlopen(f"http://127.0.0.1:{active_port}/api/telemetry", timeout=0.5)
+    except Exception:
+        def run_srv():
+            config = uvicorn.Config(app, host="127.0.0.1", port=active_port, log_level="warning")
+            server = uvicorn.Server(config)
+            server.run()
+
+        thread = threading.Thread(target=run_srv, daemon=True)
+        thread.start()
+        time.sleep(1.2)
+
+    url = f"http://127.0.0.1:{active_port}/simulation"
     print("\n" + "=" * 80)
-    print(" [*] LAUNCHING LUTHERICPU INTERACTIVE 3D SIBR SIMULATION PLATFORM (60 FPS)")
+    print(" [*] LAUNCHING LUTHERICPU 3D GAUSSIAN SPLATTING & TEXTURED MESH SIMULATION PLATFORM (60 FPS)")
     print(f" Viewport Active at: {url}")
-    print(" Mouse Controls: Left-Click + Drag to Orbit 360 deg | Right-Click to Pan | Scroll to Zoom")
+    print(" Controls: Left-Click + Drag: 360 Orbit | Mouse Wheel: Zoom In/Out | Right-Click: Pan | WASD: Fly")
     print("=" * 80 + "\n")
+
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--enable-webgl --ignore-gpu-blocklist --enable-gpu-rasterization --no-sandbox"
 
     try:
         from PySide6.QtWidgets import QApplication, QMainWindow
@@ -50,17 +82,16 @@ def launch_interactive_3d_viewport(port: int = 8080):
 
         app_qt = QApplication.instance() or QApplication(sys.argv)
         win = QMainWindow()
-        win.setWindowTitle("lutherICPU 3D SIBR Simulation Viewer (60 FPS Native Desktop)")
+        win.setWindowTitle("lutherICPU — 3D Gaussian Splatting & Textured Mesh Simulation Platform (60 FPS)")
         win.resize(1400, 900)
         view = QWebEngineView()
         view.setUrl(QUrl(url))
         win.setCentralWidget(view)
         win.show()
         app_qt.exec()
-    except Exception:
-        # Fallback to system browser
+    except Exception as e:
+        print(f"[*] Opening browser interactive 3D simulation viewport: {url} (PySide notice: {e})")
         webbrowser.open(url)
-        print("[*] Opened interactive 3D viewport in default browser.")
         try:
             while True:
                 time.sleep(1.0)
@@ -68,43 +99,56 @@ def launch_interactive_3d_viewport(port: int = 8080):
             print("\n[*] Exiting viewer.")
 
 
-from luther_renderer.sibr_desktop_app import launch_sibr_desktop
-from luther_renderer.display_window import display_simulation_window
-
-
 def main():
     parser = argparse.ArgumentParser(description="lutherICPU Standalone Desktop SIBR Simulation Player")
-    parser.add_argument("--scene", "-s", type=str, default="truck", help="Scene name to display (default: truck)")
+    parser.add_argument("--scene", "-s", type=str, default=None, help="Scene name to display (auto-detected if omitted)")
     parser.add_argument("--output", "-o", type=str, default=os.path.join(PROJECT_ROOT, "output"), help="Output root directory")
     parser.add_argument("--proof-dir", "-p", type=str, default=None, help="Explicit path to proof_renders directory")
-    parser.add_argument("--opencv", action="store_true", help="Launch lightweight OpenCV turntable window instead of SIBR Desktop GUI")
+    parser.add_argument("--software", "--cv", action="store_true", help="Launch pure CPU software projection window fallback")
+    parser.add_argument("--port", type=int, default=8080, help="Port for 3D simulation server")
     args = parser.parse_args()
 
+    scene_name = args.scene
     proof_dir = args.proof_dir
-    if not proof_dir:
-        candidates = [
-            os.path.join(args.output, "truck_photos_final", "proof_renders"),
-            os.path.join(args.output, "truck_run", "proof_renders"),
-            os.path.join(args.output, f"{args.scene}_40k_sim", "proof_renders"),
-            os.path.join(args.output, f"{args.scene}_roof_verified", "proof_renders"),
-            os.path.join(args.output, f"{args.scene}_simulation", "proof_renders"),
-            os.path.join(args.output, "proof_renders"),
-        ]
-        for c in candidates:
-            if os.path.exists(c):
-                proof_dir = c
-                break
 
-    if args.opencv:
-        display_simulation_window(proof_dir or os.path.join(args.output, "proof_renders"), scene_name=args.scene)
-        return
+    # Auto-detect latest scene from latest_simulation.json
+    latest_json = os.path.join(args.output, "latest_simulation.json")
+    if os.path.exists(latest_json):
+        try:
+            import json
+            with open(latest_json, "r") as f:
+                lat_data = json.load(f)
+                if not scene_name:
+                    scene_name = lat_data.get("scene_name")
+                if not proof_dir and lat_data.get("output_dir"):
+                    if os.path.exists(lat_data["output_dir"]):
+                        proof_dir = lat_data["output_dir"]
+        except Exception:
+            pass
 
-    # Master Default: Launch Pure Native Desktop SIBR 3D Simulation Platform (Zero Browser)
-    print("\n" + "=" * 80)
-    print(" [*] LAUNCHING LUTHERICPU STANDALONE DESKTOP SIBR 3D SIMULATION PLATFORM")
-    print(" [*] Zero Browser Dependencies | Full Interactive Mouse Controls")
-    print("=" * 80 + "\n")
-    launch_sibr_desktop(scene_name=args.scene, proof_dir=proof_dir)
+    if not scene_name:
+        scene_name = "simulation"
+
+    if args.software:
+        # Software fallback mode
+        if not proof_dir:
+            candidates = [
+                os.path.join(args.output, f"{scene_name}_3dgs"),
+                os.path.join(args.output, f"{scene_name}_sim"),
+                os.path.join(args.output, f"{scene_name}_simulation", "proof_renders"),
+                os.path.join(args.output, "proof_renders"),
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    proof_dir = c
+                    break
+        print("\n" + "=" * 80)
+        print(" [*] LAUNCHING LUTHERICPU PURE CPU SOFTWARE 3D PROJECTION WINDOW")
+        print("=" * 80 + "\n")
+        display_simulation_window(proof_dir or os.path.join(args.output, "proof_renders"), scene_name=scene_name)
+    else:
+        # Master Default: Launch 60 FPS 3D Gaussian Splatting & Mesh Simulation Viewport
+        launch_interactive_3d_viewport(port=args.port)
 
 
 if __name__ == "__main__":

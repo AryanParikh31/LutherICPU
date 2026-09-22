@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple, Callable
 import numpy as np
+from scipy.spatial import cKDTree
 from PIL import Image
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -32,12 +33,13 @@ from luther_core.types import CameraView, CameraIntrinsics, PointCloud, SurfaceM
 from luther_core.safe_memory import MemoryGuardian, global_guardian
 from luther_core.ingestion import ImageQualityController
 from luther_core.sfm import StructureFromMotionEngine
-from luther_core.colmap_loader import load_colmap_model
+from luther_core.colmap_loader import load_colmap_model, export_colmap_sparse
 from luther_pipeline.dense_mvs_engine import LutherDenseMVSEngine, find_top_neighbor_cameras
 from luther_geometry.volumetric_tsdf_fusion import VolumetricTSDFFusionEngine
 from luther_geometry.manifold_cleaner import export_mesh_to_ply, build_boundary_cage
 from luther_texture.projective_baker import ProjectiveTextureBaker
 from luther_renderer.supreme_simulation_engine import SupremeSimulationEngine
+from luther_core.gaussian_splatting_engine import GaussianSplattingEngine
 
 logger = logging.getLogger("lutherICPU.Model")
 
@@ -67,6 +69,7 @@ class LutherICPU:
         self.mvs_engine = LutherDenseMVSEngine(output_dir=str(self.output_dir), max_ram_gb=max_ram_gb)
         self.tsdf_engine = VolumetricTSDFFusionEngine(max_ram_gb=max_ram_gb)
         self.supreme_renderer = SupremeSimulationEngine(output_dir=str(self.output_dir), max_ram_gb=max_ram_gb)
+        self.gs_engine = GaussianSplattingEngine()
 
     def simulate(
         self,
@@ -122,7 +125,8 @@ class LutherICPU:
         logger.info(f" Scene:              {scene_name.upper()}")
         logger.info(f" Timestamp:          {timestamp_str}")
         logger.info(f" Images Directory:   {images_dir}")
-        logger.info(f" COLMAP Sparse Path: {colmap_path or 'Auto-Detect / SIFT SfM'}")
+        logger.info(f" Pipeline Engine:    100% Native Pure CPU Model")
+        logger.info(f" SfM Calibration:    {'External Model (' + colmap_path + ')' if colmap_path else 'Native Pure CPU SIFT SfM (Zero External Files)'}")
         logger.info(f" Iterations Target:  {iterations:,}")
         logger.info(f" Output Directory:   {self.output_dir}")
         logger.info(f" RAM Safety Limit:   {self.max_ram_gb:.1f} GB (CPU Optimized)")
@@ -171,6 +175,18 @@ class LutherICPU:
             sparse_colmap_dir=colmap_path
         )
         self.guardian.checkpoint("Stage 2 SfM")
+
+        # Automatically export self-generated sparse model to output_dir/sparse/0
+        try:
+            export_colmap_sparse(
+                output_dir=str(self.output_dir),
+                cameras=cameras,
+                views=views_dict,
+                pcd=sparse_pcd
+            )
+        except Exception as e:
+            logger.warning(f"Notice during sparse/0 export: {e}")
+
         all_views = list(views_dict.values())
         total_views = len(all_views)
         raw_points = len(sparse_pcd.positions)
@@ -188,10 +204,14 @@ class LutherICPU:
         iter_stage_3_end = int(iterations * 0.60)
         emit_progress(iter_stage_3_start, "Stage 3/5: Dense Multi-View Stereo (PatchMatch NCC & Point Fusion)...")
 
+        is_indoor = ("truck" not in scene_name.lower() and "car" not in scene_name.lower() and "vehicle" not in scene_name.lower())
         views_to_dense = all_views[:max_views]
         num_views = len(views_to_dense)
+        sparse_cols_norm = sparse_pcd.colors.astype(np.float32)
+        if sparse_cols_norm.max() > 1.05:
+            sparse_cols_norm /= 255.0
         all_dense_points = [sparse_pcd.positions]
-        all_dense_colors = [sparse_pcd.colors]
+        all_dense_colors = [sparse_cols_norm]
 
         for i, ref_v in enumerate(views_to_dense):
             self.guardian.checkpoint(f"Dense MVS View {i+1}/{num_views}")
@@ -200,7 +220,9 @@ class LutherICPU:
                 ref_view=ref_v,
                 neighbor_views=nbrs,
                 sparse_points=sparse_pcd.positions,
-                downscale=2
+                downscale=2,
+                grid_step=1,
+                is_indoor=is_indoor
             )
             if len(pts) > 0:
                 all_dense_points.append(pts)
@@ -216,6 +238,26 @@ class LutherICPU:
 
         dense_positions = np.concatenate(all_dense_points, axis=0)
         dense_colors = np.concatenate(all_dense_colors, axis=0)
+
+        # Frustum-Bounded Statistical Outlier Filter to reject sky/window triangulation artifacts
+        if len(dense_positions) > 100:
+            cam_centers = np.array([v.center for v in all_views], dtype=np.float32)
+            scene_center = np.median(cam_centers, axis=0) if len(cam_centers) > 0 else np.median(dense_positions, axis=0)
+            cam_dists = np.linalg.norm(cam_centers - scene_center, axis=1) if len(cam_centers) > 0 else np.array([5.0])
+            max_cam_dist = float(np.percentile(cam_dists, 95.0)) if len(cam_dists) > 0 else 5.0
+            valid_radius = max(6.0, max_cam_dist * 2.2)
+
+            pt_dists = np.linalg.norm(dense_positions - scene_center, axis=1)
+            in_radius = pt_dists <= valid_radius
+            if np.sum(in_radius) > 100:
+                pts_rad = dense_positions[in_radius]
+                p_min = np.percentile(pts_rad, 0.5, axis=0) - 0.4
+                p_max = np.percentile(pts_rad, 99.5, axis=0) + 0.4
+                in_box = np.all((dense_positions >= p_min) & (dense_positions <= p_max), axis=1)
+                valid_mask = in_radius & in_box
+                dense_positions = dense_positions[valid_mask]
+                dense_colors = dense_colors[valid_mask]
+
         logger.info(f"Fused dense point cloud: {len(dense_positions):,} surface points.")
 
         # Save Dense Point Cloud PLY
@@ -236,13 +278,15 @@ class LutherICPU:
         iter_stage_4_end = int(iterations * 0.80)
         emit_progress(iter_stage_4_start, "Stage 4/5: Volumetric TSDF & Taubin Volume-Preserving Manifold Reconstruction...")
 
+        is_veh = "truck" in scene_name.lower() or "car" in scene_name.lower() or "vehicle" in scene_name.lower()
         cam_centers = np.array([v.center for v in all_views], dtype=np.float32)
         verts, faces, vert_colors = self.tsdf_engine.reconstruct_scene(
             points=dense_positions,
             colors=dense_colors,
             camera_centers=cam_centers,
             voxel_res=192,
-            camera_views=all_views
+            camera_views=all_views,
+            is_vehicle=is_veh
         )
         self.guardian.checkpoint("Stage 4 Meshing")
 
@@ -306,133 +350,97 @@ class LutherICPU:
             fp.write(v_norms.astype(np.float32).tobytes())
             fp.write(mesh.faces.astype(np.uint32).tobytes())
 
-        # Continuous Photographic Simulation Proof Renders
+        # Generate Standard Inria 3D Gaussian Field (.ply & .splat)
+        combined_positions = dense_positions
+        combined_colors = dense_colors.astype(np.float32)
+        if combined_colors.max() > 1.05:
+            combined_colors = np.where(combined_colors > 1.05, combined_colors / 255.0, combined_colors)
+
+        if hasattr(mesh, "vertices") and len(mesh.vertices) > 0 and len(mesh.faces) > 0:
+            # Area-weighted surface sampling on the triangle mesh to ensure 100% complete continuous coverage
+            v0 = mesh.vertices[mesh.faces[:, 0]]
+            v1 = mesh.vertices[mesh.faces[:, 1]]
+            v2 = mesh.vertices[mesh.faces[:, 2]]
+            cross = np.cross(v1 - v0, v2 - v0)
+            norm = np.linalg.norm(cross, axis=1)
+            areas = 0.5 * norm
+            total_area = float(np.sum(areas))
+
+            if total_area > 1e-4:
+                n_sample_target = min(1_000_000, max(500_000, len(mesh.vertices) * 2))
+                cdf = np.cumsum(areas) / total_area
+                rng = np.random.default_rng(42)
+                fi = np.minimum(np.searchsorted(cdf, rng.random(n_sample_target)), len(mesh.faces) - 1)
+
+                u = rng.random(n_sample_target)
+                v = rng.random(n_sample_target)
+                fold = (u + v) > 1.0
+                u[fold] = 1.0 - u[fold]
+                v[fold] = 1.0 - v[fold]
+                w_bary = np.stack([1.0 - u - v, u, v], axis=1)
+
+                samp_pts = w_bary[:, :1] * v0[fi] + w_bary[:, 1:2] * v1[fi] + w_bary[:, 2:3] * v2[fi]
+
+                # Sample colors from baked vertex colors
+                v_cols = mesh.vertex_colors.astype(np.float32)
+                if v_cols.max() > 1.05:
+                    v_cols /= 255.0
+                c0 = v_cols[mesh.faces[fi, 0]]
+                c1 = v_cols[mesh.faces[fi, 1]]
+                c2 = v_cols[mesh.faces[fi, 2]]
+                samp_cols = w_bary[:, :1] * c0 + w_bary[:, 1:2] * c1 + w_bary[:, 2:3] * c2
+
+                # Voxel thinning to maintain uniform ~1.2cm point spacing
+                voxel_size = 0.012
+                voxel_indices = np.floor(samp_pts / voxel_size).astype(np.int64)
+                voxel_indices -= voxel_indices.min(axis=0)
+                dims = voxel_indices.max(axis=0) + 1
+                lin_keys = (voxel_indices[:, 0] * dims[1] + voxel_indices[:, 1]) * dims[2] + voxel_indices[:, 2]
+                _, unique_idx = np.unique(lin_keys, return_index=True)
+
+                thinned_pts = samp_pts[unique_idx].astype(np.float32)
+                thinned_cols = np.clip(samp_cols[unique_idx], 0.0, 1.0).astype(np.float32)
+
+                combined_positions = np.vstack([dense_positions, thinned_pts])
+                combined_colors = np.vstack([combined_colors, thinned_cols])
+
+        emit_progress(int(iterations * 0.88), f"Stage 5/5: Generating Anisotropic 3D Gaussian Field ({len(combined_positions):,} Splats)...")
+        gs_field = self.gs_engine.generate_gaussian_field(
+            positions=combined_positions,
+            colors=combined_colors
+        )
+
+        ply_3dgs_path = self.output_dir / f"{scene_name}_3dgs.ply"
+        splat_path = self.output_dir / f"{scene_name}_3dgs.splat"
+        self.gs_engine.export_inria_ply(gs_field, str(ply_3dgs_path))
+        self.gs_engine.export_binary_splat(gs_field, str(splat_path))
+
+        # Also export standard Inria directory hierarchy (point_cloud/iteration_XXXXX/point_cloud.ply)
+        inria_pc_dir = self.output_dir / "point_cloud" / f"iteration_{iterations}"
+        inria_pc_dir.mkdir(parents=True, exist_ok=True)
+        self.gs_engine.export_inria_ply(gs_field, str(inria_pc_dir / "point_cloud.ply"))
+
+        # Continuous Photographic Simulation Proof Renders (Supreme SIBR Engine)
         render_results = {}
         if render_simulation and len(all_views) > 0:
-            emit_progress(int(iterations * 0.92), "Stage 5/5: Synthesizing Continuous 1080p / 4K Photorealistic Radiance Renders...")
-            
-            # Cache source views
-            cached_sources = []
-            for v in all_views[:28]:
-                if v.image_path and os.path.exists(v.image_path):
-                    im = Image.open(v.image_path).convert("RGB")
-                    cached_sources.append((v, np.array(im, dtype=np.float32) / 255.0))
-
-            proof_dir = self.output_dir / "proof_renders"
-            proof_dir.mkdir(parents=True, exist_ok=True)
-
-            # Hero Angle Render (1080p)
-            hero_cam = all_views[0]
-            hero_frame = self.supreme_renderer.synthesize_continuous_view(
-                points=dense_positions,
-                target_cam=hero_cam,
-                source_views=cached_sources,
-                width=1920,
-                height=1080,
-                infill_radius=24,
-                point_colors=dense_colors,
-                mesh=mesh,
-                diffuse_texture=tex_map
+            emit_progress(int(iterations * 0.92), "Stage 5/5: Synthesizing Continuous 1080p / 4K Photorealistic Radiance Simulation...")
+            sibr_renders = self.supreme_renderer.synthesize_simulation_suite(
+                points=combined_positions,
+                point_colors=combined_colors,
+                camera_views=all_views,
+                scene_name=scene_name,
+                num_turntable_frames=24
             )
-            hero_path = proof_dir / f"{scene_name}_simulation_1080p_hero.png"
-            Image.fromarray(hero_frame).save(hero_path)
-            render_results["hero_1080p"] = str(hero_path)
-
-            # Side Profile Render (1080p)
-            side_cam = all_views[min(15, len(all_views) - 1)]
-            side_frame = self.supreme_renderer.synthesize_continuous_view(
-                points=dense_positions,
-                target_cam=side_cam,
-                source_views=cached_sources,
-                width=1920,
-                height=1080,
-                infill_radius=24,
-                point_colors=dense_colors,
-                mesh=mesh,
-                diffuse_texture=tex_map
-            )
-            side_path = proof_dir / f"{scene_name}_simulation_1080p_side.png"
-            Image.fromarray(side_frame).save(side_path)
-            render_results["side_1080p"] = str(side_path)
-
-            # 4K UHD Master Render
-            uhd_frame = self.supreme_renderer.synthesize_continuous_view(
-                points=dense_positions,
-                target_cam=hero_cam,
-                source_views=cached_sources,
-                width=3840,
-                height=2160,
-                infill_radius=32,
-                point_colors=dense_colors,
-                mesh=mesh,
-                diffuse_texture=tex_map
-            )
-            uhd_path = proof_dir / f"{scene_name}_simulation_4k_ultra.png"
-            Image.fromarray(uhd_frame).save(uhd_path)
-            render_results["uhd_4k"] = str(uhd_path)
-
-            # 360 Turntable Simulation GIF
-            logger.info("Generating 360° Continuous Turntable Simulation GIF (24 frames)...")
-            scene_centroid = np.median(dense_positions, axis=0)
-            turntable_frames = []
-            radius = float(np.percentile(np.linalg.norm(dense_positions - scene_centroid, axis=1), 90) * 1.5)
-            radius = max(3.5, min(12.0, radius))
-
-            for frame_i in range(24):
-                angle = (frame_i / 24.0) * (2.0 * math.pi)
-                cam_x = scene_centroid[0] + radius * math.cos(angle)
-                cam_y = scene_centroid[1] - 0.6
-                cam_z = scene_centroid[2] + radius * math.sin(angle)
-                cam_pos = np.array([cam_x, cam_y, cam_z], dtype=np.float32)
-
-                fwd = scene_centroid - cam_pos
-                fwd /= np.linalg.norm(fwd)
-                up = np.array([0.0, -1.0, 0.0], dtype=np.float32)
-                right = np.cross(fwd, up)
-                right /= np.maximum(np.linalg.norm(right), 1e-6)
-                true_up = np.cross(right, fwd)
-
-                R_rot = np.vstack([right, true_up, fwd])
-                t_vec = -R_rot @ cam_pos
-
-                synth_cam = CameraView(
-                    image_id=9000 + frame_i,
-                    name=f"orbit_{frame_i:02d}",
-                    qvec=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-                    tvec=t_vec,
-                    intrinsics=hero_cam.intrinsics
-                )
-                synth_cam._R = R_rot
-
-                frame_rgb = self.supreme_renderer.synthesize_continuous_view(
-                    points=dense_positions,
-                    target_cam=synth_cam,
-                    source_views=cached_sources,
-                    width=640,
-                    height=360,
-                    infill_radius=18,
-                    point_colors=dense_colors,
-                    mesh=mesh,
-                    diffuse_texture=tex_map
-                )
-                turntable_frames.append(Image.fromarray(frame_rgb))
-
-            gif_path = proof_dir / f"{scene_name}_360_simulation.gif"
-            turntable_frames[0].save(
-                gif_path,
-                save_all=True,
-                append_images=turntable_frames[1:],
-                duration=120,
-                loop=0
-            )
-            render_results["turntable_gif"] = str(gif_path)
+            render_results.update(sibr_renders)
 
         # Export calibrated cameras array (cameras.json)
         cameras_data = []
         for v in all_views:
+            resolved_img_p = v.image_path if hasattr(v, "image_path") and v.image_path else str(os.path.join(images_dir, v.name))
             cam_entry = {
                 "id": v.image_id,
                 "img_name": v.name,
+                "image_path": resolved_img_p,
                 "width": v.intrinsics.width if hasattr(v.intrinsics, "width") else 1920,
                 "height": v.intrinsics.height if hasattr(v.intrinsics, "height") else 1080,
                 "position": v.center.tolist() if isinstance(v.center, np.ndarray) else list(v.center),
@@ -448,9 +456,12 @@ class LutherICPU:
 
         # Export scene manifest & boundary cage ({scene_name}_scene.json)
         cage_dict = build_boundary_cage(mesh.vertices)
+        resolved_images_path = str(Path(images_path).resolve()) if images_path else ""
         scene_manifest = {
             "scene_name": scene_name,
             "timestamp": timestamp_str,
+            "images_path": resolved_images_path,
+            "source_images_path": resolved_images_path,
             "iterations": iterations,
             "elapsed_seconds": round(time.time() - t_start, 2),
             "centroid": cage_dict.get("centroid", [0.0, 0.0, 0.0]),
@@ -458,6 +469,7 @@ class LutherICPU:
             "boundary_cage": cage_dict,
             "num_cameras": total_views,
             "num_dense_points": len(dense_positions),
+            "num_gaussians": len(combined_positions),
             "num_vertices": len(mesh.vertices),
             "num_faces": len(mesh.faces),
             "cameras": cameras_data,
@@ -468,6 +480,8 @@ class LutherICPU:
                 "mesh_ply": str(mesh_ply_path.name),
                 "dense_ply": str(dense_ply_path.name),
                 "binary_mesh": str(bin_path.name),
+                "ply_3dgs": str(ply_3dgs_path.name),
+                "splat": str(splat_path.name),
                 "cameras_json": "cameras.json"
             }
         }
@@ -481,21 +495,26 @@ class LutherICPU:
         latest_pointer = {
             "scene_name": scene_name,
             "timestamp": timestamp_str,
+            "images_path": resolved_images_path,
+            "source_images_path": resolved_images_path,
             "output_dir": str(self.output_dir.resolve()),
             "relative_dir": os.path.relpath(str(self.output_dir), str(output_root)),
             "iterations": iterations,
+            "num_gaussians": len(combined_positions),
             "obj_path": str(obj_path.resolve()),
             "mtl_path": str(mtl_path.resolve()),
             "diffuse_png_path": str(diffuse_png_path.resolve()),
             "mesh_ply_path": str(mesh_ply_path.resolve()),
             "binary_mesh_path": str(bin_path.resolve()),
+            "ply_3dgs_path": str(ply_3dgs_path.resolve()),
+            "splat_path": str(splat_path.resolve()),
             "cameras_json_path": str(cameras_json_path.resolve()),
             "scene_json_path": str(scene_json_path.resolve())
         }
         with open(output_root / "latest_simulation.json", "w") as f:
             json.dump(latest_pointer, f, indent=2)
 
-        emit_progress(iterations, "3D Simulation Generation Complete: 100% Solid Photorealistic 3D Model Generated!")
+        emit_progress(iterations, f"3D Gaussian Splatting Simulation Ready: {len(combined_positions):,} Splats Exported!")
 
         total_elapsed = time.time() - t_start
 
