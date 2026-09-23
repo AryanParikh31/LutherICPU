@@ -33,6 +33,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("lutherICPU.Simulate")
 
 
+def configure_os_environment(windows: bool = False, linux: bool = False):
+    """Configures OS-specific thread limits, high-DPI scaling, and windowing backends."""
+    if windows or (not linux and sys.platform.startswith("win")):
+        try:
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+        os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
+        os.environ["OMP_NUM_THREADS"] = str(max(1, os.cpu_count() or 4))
+        logger.info("[OS Init] Mode: Windows Native (High-DPI Aware / Multi-Threaded CPU).")
+    elif linux or sys.platform.startswith("linux"):
+        if "QT_QPA_PLATFORM" not in os.environ:
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+        os.environ["OMP_NUM_THREADS"] = str(max(1, os.cpu_count() or 4))
+        logger.info("[OS Init] Mode: Linux Native (X11/Wayland / Multi-Threaded CPU).")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="lutherICPU: Train 3D Model on Input Images and Display Interactive Simulation"
@@ -48,6 +69,16 @@ def main():
         type=str,
         default="30000",
         help="Number of reconstruction/training iterations (e.g. 30000, 30k, 7000)"
+    )
+    parser.add_argument(
+        "--windows", "-w",
+        action="store_true",
+        help="Select Windows native OS platform mode (High-DPI aware, DirectX/Win32 display)"
+    )
+    parser.add_argument(
+        "--linux", "-l",
+        action="store_true",
+        help="Select Linux native OS platform mode (X11/Wayland display)"
     )
     parser.add_argument(
         "--output", "--out_dir", "-o",
@@ -79,9 +110,9 @@ def main():
         help="Run training without launching the desktop interactive display window"
     )
     parser.add_argument(
-        "--software", "--cv",
+        "--web",
         action="store_true",
-        help="Launch pure CPU software projection window fallback"
+        help="Launch browser WebGL viewport instead of native desktop popup window"
     )
     parser.add_argument(
         "--import-bundle", "-b",
@@ -97,6 +128,7 @@ def main():
     )
 
     args = parser.parse_args()
+    configure_os_environment(windows=args.windows, linux=args.linux)
 
     # Handle Colab bundle import directly
     if args.import_bundle:
@@ -142,31 +174,34 @@ def main():
         print(f" Active Splat:     {root_splat_dst}")
         print("=" * 80 + "\n")
 
-        from luther_display import launch_interactive_3d_viewport
-        launch_interactive_3d_viewport(port=args.port)
+        if args.web:
+            from luther_display import launch_interactive_3d_viewport
+            launch_interactive_3d_viewport(port=args.port)
+        else:
+            display_simulation_window(out_dir, scene_name="Colab Scene")
         return
 
     # Direct launch of desktop 3D simulation player if no training args provided
     if not args.images and not args.scene:
-        if args.software:
-            proof_dir = os.path.join(PROJECT_ROOT, "output")
-            latest_json = os.path.join(PROJECT_ROOT, "output", "latest_simulation.json")
-            scene_name = "simulation"
-            if os.path.exists(latest_json):
-                try:
-                    import json
-                    with open(latest_json, "r") as f:
-                        lat_data = json.load(f)
-                        if lat_data.get("output_dir"):
-                            proof_dir = lat_data["output_dir"]
-                        if lat_data.get("scene_name"):
-                            scene_name = lat_data["scene_name"]
-                except Exception:
-                    pass
-            display_simulation_window(proof_dir, scene_name=scene_name)
-        else:
+        proof_dir = os.path.join(PROJECT_ROOT, "output")
+        latest_json = os.path.join(PROJECT_ROOT, "output", "latest_simulation.json")
+        scene_name = "simulation"
+        if os.path.exists(latest_json):
+            try:
+                import json
+                with open(latest_json, "r") as f:
+                    lat_data = json.load(f)
+                    if lat_data.get("output_dir"):
+                        proof_dir = lat_data["output_dir"]
+                    if lat_data.get("scene_name"):
+                        scene_name = lat_data["scene_name"]
+            except Exception:
+                pass
+        if args.web:
             from luther_display import launch_interactive_3d_viewport
             launch_interactive_3d_viewport(port=args.port)
+        else:
+            display_simulation_window(proof_dir, scene_name=scene_name)
         return
 
     # Process user-specified image path
@@ -180,7 +215,6 @@ def main():
 
     # Normalize images directory path
     if os.path.isdir(args.images):
-        # Check if there is a nested 'images' directory with image files
         sub_img = os.path.join(args.images, "images")
         if os.path.isdir(sub_img) and not any(f.lower().endswith((".jpg", ".png", ".jpeg")) for f in os.listdir(args.images)):
             args.images = sub_img
@@ -201,6 +235,7 @@ def main():
     print(" [*] TRAINING LUTHERICPU 3D MODEL & SYNTHESIZING SIMULATION")
     print(f" Images Path:     {args.images}")
     print(f" Iterations:      {iters:,}")
+    print(f" OS Platform:     {'Windows (-w)' if args.windows else ('Linux (-l)' if args.linux else sys.platform)}")
     print(f" Output Path:     {out_dir}")
     print(f" SfM Engine:      {'Native Pure CPU SIFT SfM' if not args.colmap else 'External (' + args.colmap + ')'}")
     print(f" RAM Safety Cap:  {args.max_ram:.1f} GB (Pure CPU)")
@@ -226,12 +261,12 @@ def main():
 
     # Automatically launch native desktop popup window displaying 60 FPS 3D simulation
     if not args.no_display:
-        if args.software:
-            out_dir_path = result.get("output_dir") or out_dir
-            display_simulation_window(out_dir_path, scene_name=scene_name)
-        else:
+        out_dir_path = result.get("output_dir") or out_dir
+        if args.web:
             from luther_display import launch_interactive_3d_viewport
             launch_interactive_3d_viewport(port=args.port)
+        else:
+            display_simulation_window(out_dir_path, scene_name=scene_name)
 
 
 if __name__ == "__main__":

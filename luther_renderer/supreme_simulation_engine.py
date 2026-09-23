@@ -668,8 +668,9 @@ class SupremeSimulationEngine:
             optimize=False
         )
 
-        # Synchronize all proof renders to Artifact Directory
-        artifact_dir = Path(r"C:\Users\AARYAN\.gemini\antigravity-ide\brain\13224361-4efd-4356-804b-748717b4ad7e")
+        # Synchronize all proof renders to Artifact Directory if present
+        cur_conv_id = "51fcc17f-edaa-459d-a202-60bce59c9686"
+        artifact_dir = Path(os.environ.get("ANTIGRAVITY_ARTIFACT_DIR", rf"C:\Users\AARYAN\.gemini\antigravity-ide\brain\{cur_conv_id}"))
         if artifact_dir.exists():
             import shutil
             for proof_file in [hero_path, side_path, uhd_path, gif_path]:

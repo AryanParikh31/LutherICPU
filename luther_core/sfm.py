@@ -194,6 +194,10 @@ class StructureFromMotionEngine:
         last_reg_view_id = 1
         P1 = K @ np.hstack([R0, t0.reshape(3, 1)])
 
+        # Track previous frame 2D keypoint to 3D point associations for scale propagation
+        prev_kps_to_depth = {}  # (x_round, y_round) -> depth_in_prev_cam
+        prev_scale = 1.0
+
         # Match sequential adjacent pairs with fallbacks
         for i in range(1, len(image_files)):
             _, kps1, desc1 = features[last_reg_idx]
@@ -220,10 +224,46 @@ class StructureFromMotionEngine:
 
             _, R_rel, t_rel, _ = cv2.recoverPose(E, pts1_in, pts2_in, K)
 
+            # Triplet Scale Propagation: compute relative scale ratio lambda = d_prev / d_curr
+            scale_factor = 1.0
+            if len(prev_kps_to_depth) > 4:
+                scale_ratios = []
+                # Triangulate relative with unit baseline
+                P_rel1 = K @ np.hstack([np.eye(3, dtype=np.float32), np.zeros((3, 1), dtype=np.float32)])
+                P_rel2 = K @ np.hstack([R_rel.astype(np.float32), t_rel.astype(np.float32).reshape(3, 1)])
+                homo_rel = cv2.triangulatePoints(
+                    P_rel1.astype(np.float64),
+                    P_rel2.astype(np.float64),
+                    pts1_in.T.astype(np.float64),
+                    pts2_in.T.astype(np.float64)
+                )
+                w_rel = np.where(np.abs(homo_rel[3]) > 1e-7, homo_rel[3], 1e-7)
+                pts_rel_3d = (homo_rel[:3] / w_rel).T.astype(np.float32)
+
+                for p1_2d, p_rel in zip(pts1_in, pts_rel_3d):
+                    key = (int(round(p1_2d[0])), int(round(p1_2d[1])))
+                    if key in prev_kps_to_depth:
+                        d_prev = prev_kps_to_depth[key]
+                        d_curr = float(p_rel[2])
+                        if d_curr > 0.05 and d_prev > 0.05:
+                            ratio = d_prev / d_curr
+                            if 0.05 < ratio < 20.0:
+                                scale_ratios.append(ratio)
+
+                if len(scale_ratios) >= 3:
+                    scale_factor = float(np.median(scale_ratios))
+                else:
+                    scale_factor = prev_scale
+            else:
+                scale_factor = 1.0
+
+            prev_scale = scale_factor
+            t_rel_scaled = (t_rel.astype(np.float32) * scale_factor).reshape(3, 1)
+
             # Cumulative pose: X_c2 = R_rel * X_c1 + t_rel = (R_rel * R1) X_w + (R_rel * t1 + t_rel)
             prev_view = views[last_reg_view_id]
             R_curr = (R_rel.astype(np.float32) @ prev_view.R).astype(np.float32)
-            t_curr = (R_rel.astype(np.float32) @ prev_view.tvec.reshape(3, 1) + t_rel.reshape(3, 1).astype(np.float32)).ravel()
+            t_curr = (R_rel.astype(np.float32) @ prev_view.tvec.reshape(3, 1) + t_rel_scaled).ravel()
 
             curr_view = CameraView(
                 image_id=i + 1,
@@ -264,11 +304,16 @@ class StructureFromMotionEngine:
             valid_pts_mask = pos_depth & (err1 < 6.0) & (err2 < 6.0)
 
             valid_idx = np.where(valid_pts_mask)[0]
+            prev_kps_to_depth.clear()
             if len(valid_idx) > 0:
                 p3d_list.append(pts_3d[valid_idx])
                 u_pixs = np.clip(np.round(pts2_in[valid_idx, 0]).astype(int), 0, w - 1)
                 v_pixs = np.clip(np.round(pts2_in[valid_idx, 1]).astype(int), 0, h - 1)
                 p3d_colors.append(img2_rgb[v_pixs, u_pixs])
+
+                # Store keypoint depth in frame 2 coordinate system for next triplet scale propagation
+                for u_p, v_p, z_val in zip(u_pixs, v_pixs, z2_all[valid_idx]):
+                    prev_kps_to_depth[(int(u_p), int(v_p))] = float(z_val)
 
             last_reg_idx = i
             last_reg_view_id = i + 1

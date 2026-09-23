@@ -90,33 +90,63 @@ def load_scene_3d_assets(proof_dir_or_dict, scene_name: str = "simulation") -> S
     if uhd_cands:
         data.uhd_img = cv2.imread(uhd_cands[0])
 
-    # 2. Ingest 3D Geometry (.ply / .bin)
-    ply_cands = [
-        os.path.join(model_dir, f"{scene_name}_dense.ply"),
-        os.path.join(model_dir, f"{scene_name}_3dgs.ply"),
-        os.path.join(model_dir, f"{scene_name}_mesh.ply"),
-        os.path.join(model_dir, "scene.ply"),
-        os.path.join(model_dir, "input.ply"),
+    # 2. Ingest 3D Geometry (.splat / .ply / .obj / .bin)
+    splat_cands = [
+        os.path.join(model_dir, f"{scene_name}_3dgs.splat"),
+        os.path.join(model_dir, "scene.splat"),
     ]
-    ply_cands.extend(glob.glob(os.path.join(model_dir, "*.ply")))
+    splat_cands.extend(glob.glob(os.path.join(model_dir, "*.splat")))
 
-    for p_path in ply_cands:
-        if os.path.exists(p_path) and os.path.getsize(p_path) > 1000:
+    # Check for .splat first (ultra-fast direct memory mapping)
+    for s_path in splat_cands:
+        if os.path.exists(s_path) and os.path.getsize(s_path) >= 32:
             try:
-                import trimesh
-                p = trimesh.load(p_path)
-                p_pts = np.asarray(p.vertices, dtype=np.float32)
-                if hasattr(p, 'visual') and hasattr(p.visual, 'vertex_colors') and p.visual.vertex_colors is not None and len(p.visual.vertex_colors) > 0:
-                    p_cols = np.asarray(p.visual.vertex_colors[:, :3], dtype=np.uint8)
-                else:
-                    p_cols = np.full((len(p_pts), 3), 170, dtype=np.uint8)
+                raw = np.fromfile(s_path, dtype=np.uint8)
+                n_splats = len(raw) // 32
+                if n_splats > 0:
+                    raw_struct = raw[:n_splats * 32].reshape(n_splats, 32)
+                    pos = raw_struct[:, 0:12].view(np.float32).reshape(n_splats, 3).copy()
+                    cols = raw_struct[:, 24:27].copy()
+                    # Filter valid coordinates
+                    valid_mask = np.all(np.isfinite(pos), axis=1) & (np.linalg.norm(pos, axis=1) < 100.0)
+                    if np.sum(valid_mask) > 100:
+                        data.points = pos[valid_mask]
+                        data.colors = cols[valid_mask]
+                        logger.info(f"Loaded {len(data.points):,} Gaussians directly from SPLAT file: {os.path.basename(s_path)}")
+                        break
+            except Exception as e:
+                logger.warning(f"Notice parsing splat file: {e}")
 
-                if len(p_pts) > 0:
-                    data.points = p_pts
-                    data.colors = p_cols
-                    break
-            except Exception:
-                pass
+    # If no splat loaded, check PLY / OBJ / BIN geometry
+    if len(data.points) == 0:
+        ply_cands = [
+            os.path.join(model_dir, f"{scene_name}_dense.ply"),
+            os.path.join(model_dir, f"{scene_name}_3dgs.ply"),
+            os.path.join(model_dir, f"{scene_name}_mesh.ply"),
+            os.path.join(model_dir, f"{scene_name}_simulation.obj"),
+            os.path.join(model_dir, "scene.ply"),
+            os.path.join(model_dir, "input.ply"),
+        ]
+        ply_cands.extend(glob.glob(os.path.join(model_dir, "*.ply")))
+        ply_cands.extend(glob.glob(os.path.join(model_dir, "*.obj")))
+
+        for p_path in ply_cands:
+            if os.path.exists(p_path) and os.path.getsize(p_path) > 1000:
+                try:
+                    import trimesh
+                    p = trimesh.load(p_path)
+                    p_pts = np.asarray(p.vertices, dtype=np.float32)
+                    if hasattr(p, 'visual') and hasattr(p.visual, 'vertex_colors') and p.visual.vertex_colors is not None and len(p.visual.vertex_colors) > 0:
+                        p_cols = np.asarray(p.visual.vertex_colors[:, :3], dtype=np.uint8)
+                    else:
+                        p_cols = np.full((len(p_pts), 3), 170, dtype=np.uint8)
+
+                    if len(p_pts) > 0:
+                        data.points = p_pts
+                        data.colors = p_cols
+                        break
+                except Exception:
+                    pass
 
     if len(data.points) > 0:
         med = np.median(data.points, axis=0)
@@ -128,7 +158,7 @@ def load_scene_3d_assets(proof_dir_or_dict, scene_name: str = "simulation") -> S
         data.points = data.points[inliers]
         data.colors = data.colors[inliers]
         data.target = np.median(data.points, axis=0)
-        data.default_distance = max(1.8, min(3.5, float(np.percentile(dists[inliers], 20.0))))
+        data.default_distance = max(1.8, min(4.2, float(np.percentile(dists[inliers], 30.0))))
         data.total_points = len(data.points)
         logger.info(f"Loaded {data.total_points:,} 3D geometry elements. Centroid: {data.target.round(2)}, dist: {data.default_distance:.2f}m")
     else:
