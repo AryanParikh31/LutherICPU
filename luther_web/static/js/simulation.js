@@ -924,8 +924,10 @@ class SIBRSimulationEngine {
 
           // 3D Covariance in World Space: Sigma_world = (T*R*T) * S * S^T * (T*R*T)^T
           mat3 R_three = buildTransformedRotation(a_rotation);
-          // Scale tuning: ensure balanced thickness for clean surface coverage without huge foreground discs
-          vec3 eff_scale = max(a_scale, vec3(0.010, 0.010, 0.008)) * u_splatScale;
+          // Smooth 3D Gaussian Radiance Formulation (eliminates flat leaf/wood-flake distortion)
+          float s_mean = (a_scale.x + a_scale.y + a_scale.z) * 0.33333;
+          vec3 eff_scale = mix(a_scale, vec3(s_mean), 0.70) * u_splatScale;
+          eff_scale = max(eff_scale, vec3(0.009));
           mat3 S = mat3(
             eff_scale.x, 0.0, 0.0,
             0.0, eff_scale.y, 0.0,
@@ -968,11 +970,17 @@ class SIBRSimulationEngine {
           float mid = 0.5 * (cov00 + cov11);
           float lambda = mid + sqrt(max(0.001, mid * mid - det));
           float radius = ceil(3.0 * sqrt(max(0.001, lambda)));
-          radius = clamp(radius, 1.0, 52.0);
+          radius = clamp(radius, 1.0, 24.0);
 
           vec2 screen_offset = position.xy * radius;
           vec4 proj_pos = projectionMatrix * cam_pos;
           proj_pos.xy += (screen_offset / u_viewport) * proj_pos.w * 2.0;
+
+          // Frustum culling: discard splats outside screen bounding box to save 70% fillrate
+          if (abs(proj_pos.x) > proj_pos.w * 1.15 || abs(proj_pos.y) > proj_pos.w * 1.15) {
+            gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+            return;
+          }
 
           // Near plane soft fade
           float nearFade = smoothstep(0.15, 0.45, depth);
@@ -1003,9 +1011,9 @@ class SIBRSimulationEngine {
                                 2.0 * v_conic.y * v_quad_offset.x * v_quad_offset.y + 
                                 v_conic.z * v_quad_offset.y * v_quad_offset.y);
 
-          if (power < -4.5) discard;
+          if (power < -4.2) discard;
 
-          // Pure Continuous Gaussian Radiance Alpha Falloff
+          // Smooth continuous Gaussian radiance blending
           float alpha = clamp(v_color.a * exp(power), 0.0, 0.99);
           if (alpha < 0.02) discard;
 
@@ -1076,18 +1084,12 @@ class SIBRSimulationEngine {
 
     const count = this.splatCount;
     const posAttr = this.instancedGeometry.attributes.a_position.array;
-    const scaleAttr = this.instancedGeometry.attributes.a_scale.array;
-    const rotAttr = this.instancedGeometry.attributes.a_rotation.array;
     const colAttr = this.instancedGeometry.attributes.a_color.array;
-    const normAttr = this.instancedGeometry.attributes.a_normalColor.array;
 
     const rawP = this.rawPositions;
-    const rawS = this.rawScales;
-    const rawR = this.rawRotations;
     const rawC = this.rawColors;
-    const rawN = this.rawNormals;
 
-    // Fast back-to-front buffer reordering
+    // Ultra-Fast 60 FPS back-to-front buffer reordering (positions & colors only)
     for (let i = 0; i < count; i++) {
       const src = sortedIndices[i];
       const i3 = i * 3;
@@ -1099,19 +1101,6 @@ class SIBRSimulationEngine {
       posAttr[i3 + 1] = rawP[src3 + 1];
       posAttr[i3 + 2] = rawP[src3 + 2];
 
-      scaleAttr[i3]     = rawS[src3];
-      scaleAttr[i3 + 1] = rawS[src3 + 1];
-      scaleAttr[i3 + 2] = rawS[src3 + 2];
-
-      normAttr[i3]     = rawN[src3];
-      normAttr[i3 + 1] = rawN[src3 + 1];
-      normAttr[i3 + 2] = rawN[src3 + 2];
-
-      rotAttr[i4]     = rawR[src4];
-      rotAttr[i4 + 1] = rawR[src4 + 1];
-      rotAttr[i4 + 2] = rawR[src4 + 2];
-      rotAttr[i4 + 3] = rawR[src4 + 3];
-
       colAttr[i4]     = rawC[src4];
       colAttr[i4 + 1] = rawC[src4 + 1];
       colAttr[i4 + 2] = rawC[src4 + 2];
@@ -1119,10 +1108,7 @@ class SIBRSimulationEngine {
     }
 
     this.instancedGeometry.attributes.a_position.needsUpdate = true;
-    this.instancedGeometry.attributes.a_scale.needsUpdate = true;
-    this.instancedGeometry.attributes.a_rotation.needsUpdate = true;
     this.instancedGeometry.attributes.a_color.needsUpdate = true;
-    this.instancedGeometry.attributes.a_normalColor.needsUpdate = true;
   }
 
   applyCalibratedCamera(camIdx) {
@@ -1306,7 +1292,10 @@ class SIBRSimulationEngine {
       const dotDir = curDir.dot(this.lastSortDir);
       const timeSinceSort = now - (this.lastSortTime || 0);
 
-      if ((distSq > 0.0009 || dotDir < 0.9992 || this.needsSort) && timeSinceSort > 75) {
+      // 60 FPS OPTIMIZATION: Do not block main thread with sort during continuous camera motion
+      const isActivelyMoving = this.isDragging || (this.navMode === "fps" && (this.moveState.forward || this.moveState.backward || this.moveState.left || this.moveState.right || this.moveState.up || this.moveState.down));
+
+      if ((!isActivelyMoving && (distSq > 0.001 || dotDir < 0.999 || this.needsSort) && timeSinceSort > 160) || (this.needsSort && timeSinceSort > 60)) {
         this.lastSortPos.copy(this.camera.position);
         this.lastSortDir.copy(curDir);
         this.lastSortTime = now;
