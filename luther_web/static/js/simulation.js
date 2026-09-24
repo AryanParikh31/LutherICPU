@@ -331,6 +331,13 @@ class SIBRSimulationEngine {
         loader.style.opacity = "0";
         setTimeout(() => loader.style.display = "none", 400);
       }
+      // Auto-snap to first calibrated camera to ensure immediate crystal-clear view
+      if (this.calibratedCameras && this.calibratedCameras.length > 0) {
+        setTimeout(() => {
+          this.applyCalibratedCamera(0);
+          this.setRenderMode(0); // Ensure Radiance Mode is active
+        }, 150);
+      }
     } else {
       this.updateLoadingStatus("Reconstruction in progress...");
     }
