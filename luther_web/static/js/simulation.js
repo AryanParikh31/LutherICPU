@@ -116,7 +116,7 @@ class SIBRSimulationEngine {
     this.fpsPitch = 0;
 
     // Rendering Tuning & Modes
-    this.splatScale = 0.65;
+    this.splatScale = 1.6; // 1.6x ensures clean continuous radiance blending without large disc artifacts
     this.exposure = 1.0;
     this.fov = 54.0;
     this.renderMode = 0; // 0: Radiance, 1: Depth, 2: Normals, 3: Conics, 4: Mesh
@@ -541,43 +541,53 @@ class SIBRSimulationEngine {
   }
 
   async loadTexturedMesh() {
-    // 1. Instant 4K GLB Mesh Loader (<50ms decode)
-    if (typeof THREE.GLTFLoader !== "undefined") {
+    // 1. Instant 4K OBJ + MTL Textured Mesh Loader
+    if (typeof THREE.OBJLoader !== "undefined" && typeof THREE.MTLLoader !== "undefined") {
       try {
-        const gltfLoader = new THREE.GLTFLoader();
-        gltfLoader.load(
-          "/api/scene/glb",
-          (gltf) => {
-            const root = gltf.scene || gltf.scenes[0];
-            const cX = this.sceneCenter.x;
-            const cY = this.sceneCenter.y;
-            const cZ = this.sceneCenter.z;
+        const mtlLoader = new THREE.MTLLoader();
+        mtlLoader.load(
+          "/api/scene/mtl",
+          (materials) => {
+            materials.preload();
+            const objLoader = new THREE.OBJLoader();
+            objLoader.setMaterials(materials);
+            objLoader.load(
+              "/api/scene/obj",
+              (object) => {
+                const cX = this.sceneCenter.x;
+                const cY = this.sceneCenter.y;
+                const cZ = this.sceneCenter.z;
 
-            root.traverse((child) => {
-              if (child.isMesh) {
-                child.material.side = THREE.DoubleSide;
-                if (child.material.map) {
-                  child.material.map.colorSpace = THREE.SRGBColorSpace;
-                }
+                object.traverse((child) => {
+                  if (child.isMesh) {
+                    child.material.side = THREE.DoubleSide;
+                    if (child.material.map) {
+                      child.material.map.colorSpace = THREE.SRGBColorSpace;
+                    }
+                  }
+                });
+                object.position.set(-cX, cY, cZ);
+                object.scale.set(1, -1, -1);
+                object.visible = (this.renderMode === 4);
+                this.meshObject = object;
+                this.scene.add(object);
+                console.log("[SIBR] Solid 4K UV Textured OBJ Model mounted successfully.");
+              },
+              undefined,
+              (err) => {
+                console.log("[SIBR] OBJ fallback to binary PLY parser:", err);
+                this.loadBinaryPLYMesh();
               }
-            });
-            root.position.set(-cX, cY, cZ);
-            root.scale.set(1, -1, -1);
-            root.visible = (this.renderMode === 4);
-            this.meshObject = root;
-            this.scene.add(root);
-            console.log("[SIBR] Instant 4K Textured GLB Model mounted (<50ms).");
-            return;
+            );
           },
           undefined,
-          (err) => {
-            console.log("[SIBR] GLB fallback to binary PLY parser:", err);
+          () => {
             this.loadBinaryPLYMesh();
           }
         );
         return;
       } catch (err) {
-        console.warn("[SIBR] GLTFLoader error, falling back:", err);
+        console.warn("[SIBR] OBJLoader error, falling back:", err);
       }
     }
     this.loadBinaryPLYMesh();
@@ -746,45 +756,16 @@ class SIBRSimulationEngine {
       }
       geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
 
-      // Load photographic diffuse texture atlas
-      const texLoader = new THREE.TextureLoader();
-      texLoader.load(
-        "/api/scene/texture",
-        (texture) => {
-          texture.colorSpace = THREE.SRGBColorSpace;
-          texture.wrapS = THREE.RepeatWrapping;
-          texture.wrapT = THREE.RepeatWrapping;
-          texture.flipY = false;
-          texture.generateMipmaps = true;
-          texture.minFilter = THREE.LinearMipmapLinearFilter;
-          texture.magFilter = THREE.LinearFilter;
-          if (this.renderer && this.renderer.capabilities) {
-            texture.anisotropy = Math.min(16, this.renderer.capabilities.getMaxAnisotropy());
-          }
-
-          // Unlit photographic material to preserve full dynamic range of baked photos
-          const material = new THREE.MeshBasicMaterial({
-            map: texture,
-            side: THREE.DoubleSide
-          });
-          const mesh = new THREE.Mesh(geometry, material);
-          mesh.visible = (this.renderMode === 4);
-          this.meshObject = mesh;
-          this.scene.add(mesh);
-          console.log(`[SIBR] Solid 4K UV Textured Mesh mounted: ${vertexCount.toLocaleString()} verts, ${numFaces.toLocaleString()} faces.`);
-        },
-        undefined,
-        () => {
-          const material = new THREE.MeshBasicMaterial({
-            vertexColors: true,
-            side: THREE.DoubleSide
-          });
-          const mesh = new THREE.Mesh(geometry, material);
-          mesh.visible = (this.renderMode === 4);
-          this.meshObject = mesh;
-          this.scene.add(mesh);
-        }
-      );
+      // Photorealistic Mesh Material using baked multi-angle photographic vertex colors
+      const material = new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        side: THREE.DoubleSide
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.visible = (this.renderMode === 4);
+      this.meshObject = mesh;
+      this.scene.add(mesh);
+      console.log(`[SIBR] Solid Photorealistic 3D Mesh mounted: ${vertexCount.toLocaleString()} verts, ${numFaces.toLocaleString()} faces.`);
     } catch (e) {
       console.warn("[SIBR] Binary mesh layer notice:", e);
     }
@@ -923,8 +904,6 @@ class SIBRSimulationEngine {
           float r22 = 1.0 - 2.0 * (x * x + y * y);
 
           // Exact T * R * T similarity transformation (T = diag(1, -1, -1)):
-          // Cross-terms involving Y and Z axes are sign-inverted:
-          // Column 0, Column 1, Column 2 in GLSL column-major format:
           return mat3(
             vec3( r00, -r10, -r20),
             vec3(-r01,  r11,  r21),
@@ -938,14 +917,15 @@ class SIBRSimulationEngine {
           v_depth = depth;
 
           // Frustum near-plane & far-plane clipping
-          if (cam_pos.z >= -0.05 || depth >= 250.0) {
+          if (cam_pos.z >= -0.15 || depth >= 300.0) {
             gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
             return;
           }
 
           // 3D Covariance in World Space: Sigma_world = (T*R*T) * S * S^T * (T*R*T)^T
           mat3 R_three = buildTransformedRotation(a_rotation);
-          vec3 eff_scale = a_scale * u_splatScale;
+          // Scale tuning: ensure balanced thickness for clean surface coverage without huge foreground discs
+          vec3 eff_scale = max(a_scale, vec3(0.010, 0.010, 0.008)) * u_splatScale;
           mat3 S = mat3(
             eff_scale.x, 0.0, 0.0,
             0.0, eff_scale.y, 0.0,
@@ -968,10 +948,9 @@ class SIBRSimulationEngine {
           float cov_raw_00 = dot(J0, V_cam * J0);
           float cov_raw_11 = dot(J1, V_cam * J1);
           float cov_raw_01 = dot(J0, V_cam * J1);
-          float det_raw = max(0.0, cov_raw_00 * cov_raw_11 - cov_raw_01 * cov_raw_01);
 
-          // EWA Anti-aliasing low-pass filter dilation (+0.3px low-pass kernel)
-          float s_filter = 0.3;
+          // EWA Anti-aliasing low-pass filter dilation (+0.25px low-pass kernel)
+          float s_filter = 0.25;
           float cov00 = cov_raw_00 + s_filter;
           float cov11 = cov_raw_11 + s_filter;
           float cov01 = cov_raw_01;
@@ -985,33 +964,22 @@ class SIBRSimulationEngine {
           float det_inv = 1.0 / det;
           v_conic = vec3(cov11 * det_inv, -cov01 * det_inv, cov00 * det_inv);
 
-          // ECA-EWA Determinant-Preserving Energy Opacity Compensation:
-          // alpha_dilated = alpha_base * sqrt(det_raw / det_dilated)
-          float opacity_compensation = sqrt(clamp(det_raw / det, 0.0, 1.0));
-          float effective_alpha = a_color.a * opacity_compensation;
-
-          // Culling sub-threshold or tiny transparent splats (prevents overview bokeh fog)
-          if (effective_alpha < 0.005) {
-            gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-            return;
-          }
-
           // 2D Screen Radius Calculation (3-sigma confidence)
           float mid = 0.5 * (cov00 + cov11);
           float lambda = mid + sqrt(max(0.001, mid * mid - det));
           float radius = ceil(3.0 * sqrt(max(0.001, lambda)));
-          radius = clamp(radius, 0.5, 48.0);
+          radius = clamp(radius, 1.0, 52.0);
 
           vec2 screen_offset = position.xy * radius;
           vec4 proj_pos = projectionMatrix * cam_pos;
           proj_pos.xy += (screen_offset / u_viewport) * proj_pos.w * 2.0;
 
           // Near plane soft fade
-          float nearFade = smoothstep(0.05, 0.25, depth);
+          float nearFade = smoothstep(0.15, 0.45, depth);
 
           v_quad_pos = position.xy;
           v_quad_offset = screen_offset;
-          v_color = vec4(a_color.rgb * u_exposure, effective_alpha * nearFade);
+          v_color = vec4(a_color.rgb * u_exposure, a_color.a * nearFade);
           v_normalColor = a_normalColor;
           gl_Position = proj_pos;
         }
@@ -1026,7 +994,7 @@ class SIBRSimulationEngine {
         uniform int u_renderMode;
 
         void main() {
-          // Circular disc boundary mask: eliminates 100% of quad square edges
+          // Circular disc boundary mask
           float r2 = dot(v_quad_pos, v_quad_pos);
           if (r2 > 1.0) discard;
 
@@ -1037,10 +1005,9 @@ class SIBRSimulationEngine {
 
           if (power < -4.5) discard;
 
-          // Smooth radial edge feathering so boundaries dissolve seamlessly
-          float edgeFade = 1.0 - smoothstep(0.70, 1.0, r2);
-          float alpha = clamp(v_color.a * exp(power) * edgeFade, 0.0, 0.99);
-          if (alpha < 0.015) discard;
+          // Pure Continuous Gaussian Radiance Alpha Falloff
+          float alpha = clamp(v_color.a * exp(power), 0.0, 0.99);
+          if (alpha < 0.02) discard;
 
           vec3 baseColor = v_color.rgb;
           if (u_renderMode == 1) {
@@ -1057,7 +1024,7 @@ class SIBRSimulationEngine {
             baseColor = vec3(0.0, 0.94, 1.0);
           }
 
-          // PREMULTIPLIED ALPHA: Smooth continuous Gaussian radiance blending without circular disc cutouts
+          // PREMULTIPLIED ALPHA: Smooth continuous Gaussian radiance blending
           gl_FragColor = vec4(baseColor * alpha, alpha);
         }
       `,
