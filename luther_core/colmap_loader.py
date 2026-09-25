@@ -147,28 +147,157 @@ def read_points3d_binary(path: str, max_points: Optional[int] = None) -> PointCl
     )
 
 
+def read_cameras_text(path: str) -> Dict[int, CameraIntrinsics]:
+    """Reads cameras.txt from a COLMAP reconstruction directory."""
+    cameras = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            camera_id = int(parts[0])
+            model_name = parts[1]
+            width = int(parts[2])
+            height = int(parts[3])
+            params = [float(p) for p in parts[4:]]
+
+            if model_name in ("SIMPLE_PINHOLE", "SIMPLE_RADIAL"):
+                fx = fy = float(params[0])
+                cx = float(params[1])
+                cy = float(params[2])
+            elif model_name in ("PINHOLE", "RADIAL", "OPENCV", "FULL_OPENCV"):
+                fx = float(params[0])
+                fy = float(params[1])
+                cx = float(params[2])
+                cy = float(params[3])
+            else:
+                fx = float(params[0])
+                fy = float(params[1]) if len(params) > 1 else fx
+                cx = float(params[2]) if len(params) > 2 else width / 2.0
+                cy = float(params[3]) if len(params) > 3 else height / 2.0
+
+            cameras[camera_id] = CameraIntrinsics(
+                width=width,
+                height=height,
+                fx=fx,
+                fy=fy,
+                cx=cx,
+                cy=cy,
+                model=model_name,
+                params=np.array(params, dtype=np.float32)
+            )
+    return cameras
+
+
+def read_images_text(path: str, cameras: Dict[int, CameraIntrinsics], images_dir: Optional[str] = None) -> Dict[int, CameraView]:
+    """Reads images.txt from a COLMAP reconstruction directory."""
+    views = {}
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        i += 1
+        if not line or line.startswith("#"):
+            continue
+
+        parts = line.split()
+        image_id = int(parts[0])
+        qvec = np.array([float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])], dtype=np.float32)
+        tvec = np.array([float(parts[5]), float(parts[6]), float(parts[7])], dtype=np.float32)
+        camera_id = int(parts[8])
+        image_name = parts[9]
+
+        # Next line contains 2D points
+        xys = []
+        p3d_ids = []
+        if i < len(lines):
+            pts_line = lines[i].strip()
+            i += 1
+            if pts_line and not pts_line.startswith("#"):
+                p_parts = pts_line.split()
+                for k in range(0, len(p_parts), 3):
+                    if k + 2 < len(p_parts):
+                        xys.append([float(p_parts[k]), float(p_parts[k+1])])
+                        p3d_ids.append(int(p_parts[k+2]))
+
+        intrinsics = cameras.get(camera_id, next(iter(cameras.values())))
+        img_path = os.path.join(images_dir, image_name) if images_dir else None
+
+        views[image_id] = CameraView(
+            image_id=image_id,
+            name=image_name,
+            qvec=qvec,
+            tvec=tvec,
+            intrinsics=intrinsics,
+            image_path=img_path,
+            point3d_ids=np.array(p3d_ids, dtype=np.int64) if p3d_ids else np.array([], dtype=np.int64),
+            xys=np.array(xys, dtype=np.float32) if xys else np.empty((0, 2), dtype=np.float32)
+        )
+
+    return views
+
+
+def read_points3d_text(path: str, max_points: Optional[int] = None) -> PointCloud:
+    """Reads points3D.txt from a COLMAP reconstruction directory."""
+    positions = []
+    colors = []
+    errors = []
+
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            # POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[]
+            x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
+            r, g, b = int(parts[4]), int(parts[5]), int(parts[6])
+            err = float(parts[7])
+            positions.append([x, y, z])
+            colors.append([r, g, b])
+            errors.append(err)
+            if max_points and len(positions) >= max_points:
+                break
+
+    return PointCloud(
+        positions=np.array(positions, dtype=np.float32) if positions else np.empty((0, 3), dtype=np.float32),
+        colors=np.array(colors, dtype=np.uint8) if colors else np.empty((0, 3), dtype=np.uint8),
+        errors=np.array(errors, dtype=np.float32) if errors else np.empty((0,), dtype=np.float32)
+    )
+
+
 def load_colmap_model(sparse_dir: str, images_dir: Optional[str] = None) -> Tuple[Dict[int, CameraIntrinsics], Dict[int, CameraView], PointCloud]:
-    """Loads a complete COLMAP model (cameras, images, pointcloud) from binary files."""
-    cam_bin = os.path.join(sparse_dir, "cameras.bin")
-    img_bin = os.path.join(sparse_dir, "images.bin")
-    pts_bin = os.path.join(sparse_dir, "points3D.bin")
+    """Loads a complete COLMAP model (cameras, images, pointcloud) from either binary or text files."""
+    # Check candidates
+    dirs_to_check = [sparse_dir, os.path.join(sparse_dir, "0")]
+    
+    for d in dirs_to_check:
+        cam_bin = os.path.join(d, "cameras.bin")
+        img_bin = os.path.join(d, "images.bin")
+        pts_bin = os.path.join(d, "points3D.bin")
 
-    if not (os.path.exists(cam_bin) and os.path.exists(img_bin) and os.path.exists(pts_bin)):
-        # Check subfolder '0' if present
-        sub_dir = os.path.join(sparse_dir, "0")
-        if os.path.exists(os.path.join(sub_dir, "cameras.bin")):
-            cam_bin = os.path.join(sub_dir, "cameras.bin")
-            img_bin = os.path.join(sub_dir, "images.bin")
-            pts_bin = os.path.join(sub_dir, "points3D.bin")
-        else:
-            raise FileNotFoundError(f"Cannot find COLMAP binary files in {sparse_dir} or {sub_dir}")
+        if os.path.exists(cam_bin) and os.path.exists(img_bin) and os.path.exists(pts_bin):
+            cameras = read_cameras_binary(cam_bin)
+            views = read_images_binary(img_bin, cameras, images_dir=images_dir)
+            pcd = read_points3d_binary(pts_bin)
+            logger.info(f"Loaded COLMAP binary model from '{d}': {len(cameras)} cameras, {len(views)} image poses, {len(pcd)} 3D points.")
+            return cameras, views, pcd
 
-    cameras = read_cameras_binary(cam_bin)
-    views = read_images_binary(img_bin, cameras, images_dir=images_dir)
-    pcd = read_points3d_binary(pts_bin)
+        cam_txt = os.path.join(d, "cameras.txt")
+        img_txt = os.path.join(d, "images.txt")
+        pts_txt = os.path.join(d, "points3D.txt")
 
-    logger.info(f"Loaded COLMAP model: {len(cameras)} cameras, {len(views)} image poses, {len(pcd)} 3D points.")
-    return cameras, views, pcd
+        if os.path.exists(cam_txt) and os.path.exists(img_txt) and os.path.exists(pts_txt):
+            cameras = read_cameras_text(cam_txt)
+            views = read_images_text(img_txt, cameras, images_dir=images_dir)
+            pcd = read_points3d_text(pts_txt)
+            logger.info(f"Loaded COLMAP text model from '{d}': {len(cameras)} cameras, {len(views)} image poses, {len(pcd)} 3D points.")
+            return cameras, views, pcd
+
+    raise FileNotFoundError(f"Cannot find COLMAP binary (.bin) or text (.txt) files in {sparse_dir} or subfolder '0'")
 
 
 def export_colmap_sparse(

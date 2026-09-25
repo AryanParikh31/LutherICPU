@@ -120,6 +120,8 @@ class GaussianSplattingEngine:
         positions: np.ndarray,
         colors: np.ndarray,
         normals: Optional[np.ndarray] = None,
+        scales: Optional[np.ndarray] = None,
+        opacities: Optional[np.ndarray] = None,
         default_opacity: float = 0.98
     ) -> Dict[str, np.ndarray]:
         """
@@ -137,11 +139,15 @@ class GaussianSplattingEngine:
         f_dc = self.rgb_to_sh_dc(colors)
 
         # 2. Anisotropic Curvature-Aware Scales
-        scales = self.compute_knn_scales(pos, k=3, wafer_aspect_ratio=0.08)
+        if scales is None or len(scales) != N:
+            scales = self.compute_knn_scales(pos, k=3, wafer_aspect_ratio=0.08)
         log_scales = np.log(np.maximum(scales, 1e-6)).astype(np.float32)
 
         # 3. Opacity (logit space for standard 3DGS PLY: ln(alpha / (1 - alpha)))
-        opacities_linear = np.full(N, default_opacity, dtype=np.float32)
+        if opacities is None or len(opacities) != N:
+            opacities_linear = np.full(N, default_opacity, dtype=np.float32)
+        else:
+            opacities_linear = opacities.astype(np.float32)
         alpha_clamped = np.clip(opacities_linear, 1e-4, 1.0 - 1e-4)
         logit_opacities = np.log(alpha_clamped / (1.0 - alpha_clamped)).astype(np.float32)
 

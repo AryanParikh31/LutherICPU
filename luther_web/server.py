@@ -382,10 +382,13 @@ def get_solid_mesh_ply(scene_id: str = "default"):
 
 @app.get("/api/scene/{scene_id}/texture")
 @app.get("/api/scene/texture")
-def get_solid_mesh_texture(scene_id: str = "default"):
-    """Returns the 4K photographic UV texture atlas for the solid mesh."""
-    candidates = [
+@app.get("/api/scene/{filename:path}")
+def get_solid_mesh_texture(filename: Optional[str] = None, scene_id: str = "default"):
+    """Returns the 4K photographic UV texture atlas or generic scene asset."""
+    cand = [filename] if filename and not filename.startswith("texture") else []
+    candidates = cand + [
         f"{scene_id}_diffuse_atlas.png",
+        "drjohnson_diffuse_atlas.png",
         "truck_photos_diffuse_atlas.png",
         "truck_diffuse_atlas.png",
         f"{scene_id}_diffuse.png",
@@ -395,7 +398,7 @@ def get_solid_mesh_texture(scene_id: str = "default"):
     ]
     p = find_asset_file(candidates, asset_type="diffuse_png_path")
     if p and os.path.exists(p):
-        media = "image/png" if p.endswith(".png") else "image/jpeg"
+        media = "image/png" if p.endswith(".png") else ("image/jpeg" if p.endswith((".jpg", ".jpeg")) else "application/octet-stream")
         return FileResponse(p, media_type=media)
     raise HTTPException(status_code=404, detail="Texture atlas not found.")
 

@@ -116,7 +116,7 @@ class SIBRSimulationEngine {
     this.fpsPitch = 0;
 
     // Rendering Tuning & Modes
-    this.splatScale = 1.6; // 1.6x ensures clean continuous radiance blending without large disc artifacts
+    this.splatScale = 0.85; // 0.85x ensures razor-sharp micro-textures without oversized circles
     this.exposure = 1.0;
     this.fov = 54.0;
     this.renderMode = 0; // 0: Radiance, 1: Depth, 2: Normals, 3: Conics, 4: Mesh
@@ -927,7 +927,7 @@ class SIBRSimulationEngine {
           // Smooth 3D Gaussian Radiance Formulation (eliminates flat leaf/wood-flake distortion)
           float s_mean = (a_scale.x + a_scale.y + a_scale.z) * 0.33333;
           vec3 eff_scale = mix(a_scale, vec3(s_mean), 0.70) * u_splatScale;
-          eff_scale = max(eff_scale, vec3(0.009));
+          eff_scale = max(eff_scale, vec3(0.003));
           mat3 S = mat3(
             eff_scale.x, 0.0, 0.0,
             0.0, eff_scale.y, 0.0,
@@ -970,7 +970,7 @@ class SIBRSimulationEngine {
           float mid = 0.5 * (cov00 + cov11);
           float lambda = mid + sqrt(max(0.001, mid * mid - det));
           float radius = ceil(3.0 * sqrt(max(0.001, lambda)));
-          radius = clamp(radius, 1.0, 24.0);
+          radius = clamp(radius, 0.75, 14.0);
 
           vec2 screen_offset = position.xy * radius;
           vec4 proj_pos = projectionMatrix * cam_pos;
@@ -1059,7 +1059,11 @@ class SIBRSimulationEngine {
 
     const badgeSurfel = document.getElementById("badge-surfel-count");
     if (badgeSurfel) {
-      badgeSurfel.textContent = `${(count / 1000).toFixed(0)}k Splats`;
+      if (count >= 1000000) {
+        badgeSurfel.textContent = `${(count / 1000000).toFixed(2)}M Splats`;
+      } else {
+        badgeSurfel.textContent = `${(count / 1000).toFixed(0)}k Splats`;
+      }
     }
 
     // Set optimal exterior overview framing outside the splat cloud

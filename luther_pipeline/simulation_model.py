@@ -40,6 +40,7 @@ from luther_geometry.manifold_cleaner import export_mesh_to_ply, build_boundary_
 from luther_texture.projective_baker import ProjectiveTextureBaker
 from luther_renderer.supreme_simulation_engine import SupremeSimulationEngine
 from luther_core.gaussian_splatting_engine import GaussianSplattingEngine
+from luther_core.gaussian_trainer import PhotometricGaussianTrainer
 
 logger = logging.getLogger("lutherICPU.Model")
 
@@ -56,7 +57,7 @@ class LutherICPU:
     def __init__(
         self,
         output_dir: Optional[str] = None,
-        max_ram_gb: float = 3.2,
+        max_ram_gb: float = 3.8,
         blur_threshold: float = 60.0
     ):
         self.custom_output_dir = Path(output_dir) if output_dir else None
@@ -70,6 +71,7 @@ class LutherICPU:
         self.tsdf_engine = VolumetricTSDFFusionEngine(max_ram_gb=max_ram_gb)
         self.supreme_renderer = SupremeSimulationEngine(output_dir=str(self.output_dir), max_ram_gb=max_ram_gb)
         self.gs_engine = GaussianSplattingEngine()
+        self.trainer = PhotometricGaussianTrainer(max_ram_gb=max_ram_gb)
 
     def simulate(
         self,
@@ -77,7 +79,7 @@ class LutherICPU:
         colmap_path: Optional[str] = None,
         iterations: int = 30000,
         scene_name: Optional[str] = None,
-        texture_resolution: int = 2048,
+        texture_resolution: int = 4096,
         render_simulation: bool = True,
         max_views: int = 40,
         progress_callback: Optional[Callable[[int, int, str, Dict[str, Any]], None]] = None
@@ -367,7 +369,7 @@ class LutherICPU:
             total_area = float(np.sum(areas))
 
             if total_area > 1e-4:
-                n_sample_target = min(1_000_000, max(500_000, len(mesh.vertices) * 2))
+                n_sample_target = min(4_000_000, max(1_500_000, len(mesh.vertices) * 3))
                 cdf = np.cumsum(areas) / total_area
                 rng = np.random.default_rng(42)
                 fi = np.minimum(np.searchsorted(cdf, rng.random(n_sample_target)), len(mesh.faces) - 1)
@@ -390,8 +392,8 @@ class LutherICPU:
                 c2 = v_cols[mesh.faces[fi, 2]]
                 samp_cols = w_bary[:, :1] * c0 + w_bary[:, 1:2] * c1 + w_bary[:, 2:3] * c2
 
-                # Voxel thinning to maintain uniform ~1.2cm point spacing
-                voxel_size = 0.012
+                # High-definition 5mm voxel grid to retain intricate micro-textures
+                voxel_size = 0.005
                 voxel_indices = np.floor(samp_pts / voxel_size).astype(np.int64)
                 voxel_indices -= voxel_indices.min(axis=0)
                 dims = voxel_indices.max(axis=0) + 1
@@ -404,10 +406,25 @@ class LutherICPU:
                 combined_positions = np.vstack([dense_positions, thinned_pts])
                 combined_colors = np.vstack([combined_colors, thinned_cols])
 
-        emit_progress(int(iterations * 0.88), f"Stage 5/5: Generating Anisotropic 3D Gaussian Field ({len(combined_positions):,} Splats)...")
+        # Multi-View Photometric Training & Adaptive Detail Densification
+        emit_progress(int(iterations * 0.84), "Stage 5/5: Multi-View Photometric Training & Adaptive Densification (Carpet, Paintings, Moldings)...")
+        opt_pos, opt_col, opt_opac, opt_scales = self.trainer.optimize_and_densify(
+            positions=combined_positions,
+            colors=combined_colors,
+            camera_views=all_views,
+            num_epochs=3,
+            densify_target=3_800_000,
+            voxel_size=0.005
+        )
+        combined_positions = opt_pos
+        combined_colors = opt_col
+
+        emit_progress(int(iterations * 0.89), f"Stage 5/5: Generating High-Definition 3D Gaussian Field ({len(combined_positions):,} Splats)...")
         gs_field = self.gs_engine.generate_gaussian_field(
             positions=combined_positions,
-            colors=combined_colors
+            colors=combined_colors,
+            scales=opt_scales,
+            opacities=opt_opac
         )
 
         ply_3dgs_path = self.output_dir / f"{scene_name}_3dgs.ply"
