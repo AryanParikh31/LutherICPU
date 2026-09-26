@@ -127,6 +127,12 @@ def main():
         help="Port for 3D simulation server (default: 8080)"
     )
 
+    parser.add_argument(
+        "--software", "--cv",
+        action="store_true",
+        help="Launch pure CPU software projection window fallback instead of hardware WebGL viewport"
+    )
+
     args = parser.parse_args()
     configure_os_environment(windows=args.windows, linux=args.linux)
 
@@ -147,7 +153,6 @@ def main():
             print(f"[*] Extracting Colab simulation bundle: {os.path.basename(bundle_path)}...")
             with zipfile.ZipFile(bundle_path, 'r') as zf:
                 zf.extractall(out_dir)
-            # Locate splat
             cand_splat = os.path.join(out_dir, "scene.splat")
             if os.path.exists(cand_splat):
                 import shutil
@@ -157,7 +162,6 @@ def main():
             shutil.copy2(bundle_path, splat_dst)
             shutil.copy2(bundle_path, root_splat_dst)
 
-        # Update latest_simulation.json
         manifest_data = {
             "scene_name": "Cloud GPU Trained Scene",
             "output_dir": out_dir,
@@ -174,14 +178,14 @@ def main():
         print(f" Active Splat:     {root_splat_dst}")
         print("=" * 80 + "\n")
 
-        if args.web:
+        if args.software:
+            display_simulation_window(out_dir, scene_name="Colab Scene")
+        else:
             from luther_display import launch_interactive_3d_viewport
             launch_interactive_3d_viewport(port=args.port)
-        else:
-            display_simulation_window(out_dir, scene_name="Colab Scene")
         return
 
-    # Direct launch of desktop 3D simulation player if no training args provided
+    # Direct launch of interactive 3D simulation player if no training args provided
     if not args.images and not args.scene:
         proof_dir = os.path.join(PROJECT_ROOT, "output")
         latest_json = os.path.join(PROJECT_ROOT, "output", "latest_simulation.json")
@@ -197,11 +201,11 @@ def main():
                         scene_name = lat_data["scene_name"]
             except Exception:
                 pass
-        if args.web:
+        if args.software:
+            display_simulation_window(proof_dir, scene_name=scene_name)
+        else:
             from luther_display import launch_interactive_3d_viewport
             launch_interactive_3d_viewport(port=args.port)
-        else:
-            display_simulation_window(proof_dir, scene_name=scene_name)
         return
 
     # Process user-specified image path
@@ -259,14 +263,14 @@ def main():
     print(f" Texture Atlas:    {result['diffuse_png_path']}")
     print("=" * 80 + "\n")
 
-    # Automatically launch native desktop popup window displaying 60 FPS 3D simulation
+    # Automatically launch native desktop viewport displaying 60 FPS 3D simulation
     if not args.no_display:
         out_dir_path = result.get("output_dir") or out_dir
-        if args.web:
+        if args.software:
+            display_simulation_window(out_dir_path, scene_name=scene_name)
+        else:
             from luther_display import launch_interactive_3d_viewport
             launch_interactive_3d_viewport(port=args.port)
-        else:
-            display_simulation_window(out_dir_path, scene_name=scene_name)
 
 
 if __name__ == "__main__":

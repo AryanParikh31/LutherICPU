@@ -108,11 +108,16 @@ def load_scene_3d_assets(proof_dir_or_dict, scene_name: str = "simulation") -> S
                     pos = raw_struct[:, 0:12].view(np.float32).reshape(n_splats, 3).copy()
                     cols = raw_struct[:, 24:27].copy()
                     # Filter valid coordinates
-                    valid_mask = np.all(np.isfinite(pos), axis=1) & (np.linalg.norm(pos, axis=1) < 100.0)
+                    valid_mask = np.all(np.isfinite(pos), axis=1) & (np.linalg.norm(pos, axis=1) < 50.0)
                     if np.sum(valid_mask) > 100:
-                        data.points = pos[valid_mask]
-                        data.colors = cols[valid_mask]
-                        logger.info(f"Loaded {len(data.points):,} Gaussians directly from SPLAT file: {os.path.basename(s_path)}")
+                        data.total_points = n_splats
+                        valid_pos = pos[valid_mask]
+                        valid_cols = cols[valid_mask]
+                        # Subsample for 60 FPS pure CPU software projection
+                        sub_step = max(1, len(valid_pos) // 200_000)
+                        data.points = valid_pos[::sub_step]
+                        data.colors = valid_cols[::sub_step]
+                        logger.info(f"Loaded {n_splats:,} Gaussians (subsampled to {len(data.points):,} for 60 FPS CPU display) from: {os.path.basename(s_path)}")
                         break
             except Exception as e:
                 logger.warning(f"Notice parsing splat file: {e}")
@@ -142,8 +147,10 @@ def load_scene_3d_assets(proof_dir_or_dict, scene_name: str = "simulation") -> S
                         p_cols = np.full((len(p_pts), 3), 170, dtype=np.uint8)
 
                     if len(p_pts) > 0:
-                        data.points = p_pts
-                        data.colors = p_cols
+                        data.total_points = len(p_pts)
+                        sub_step = max(1, len(p_pts) // 200_000)
+                        data.points = p_pts[::sub_step]
+                        data.colors = p_cols[::sub_step]
                         break
                 except Exception:
                     pass
@@ -151,15 +158,16 @@ def load_scene_3d_assets(proof_dir_or_dict, scene_name: str = "simulation") -> S
     if len(data.points) > 0:
         med = np.median(data.points, axis=0)
         dists = np.linalg.norm(data.points - med, axis=1)
-        r_cutoff = float(np.percentile(dists, 95.0) * 1.3)
-        r_cutoff = max(8.0, min(35.0, r_cutoff))
+        r_cutoff = float(np.percentile(dists, 92.0) * 1.1)
+        r_cutoff = max(4.0, min(15.0, r_cutoff))
 
         inliers = dists <= r_cutoff
         data.points = data.points[inliers]
         data.colors = data.colors[inliers]
         data.target = np.median(data.points, axis=0)
-        data.default_distance = max(1.8, min(4.2, float(np.percentile(dists[inliers], 30.0))))
-        data.total_points = len(data.points)
+        data.default_distance = 2.40
+        if not data.total_points:
+            data.total_points = len(data.points)
         logger.info(f"Loaded {data.total_points:,} 3D geometry elements. Centroid: {data.target.round(2)}, dist: {data.default_distance:.2f}m")
     else:
         # Fallback procedural 3D model
@@ -172,7 +180,8 @@ def load_scene_3d_assets(proof_dir_or_dict, scene_name: str = "simulation") -> S
         data.points = pts
         data.colors = cols
         data.target = np.zeros(3, dtype=np.float32)
-        data.default_distance = 3.2
+        data.default_distance = 2.4
+        data.total_points = N
         data.total_points = N
 
     return data
@@ -367,13 +376,14 @@ def display_simulation_window(
     cv2.resizeWindow(window_title, 1280, 720)
 
     # 3D Camera & Simulation State
+    default_mode = "HERO" if scene_data.hero_img is not None else "3D"
     cam_state = {
-        "mode": "3D",  # "3D", "HERO", "SIDE", "4K"
-        "yaw_deg": 35.0,
-        "pitch_deg": 12.0,
+        "mode": default_mode,  # "HERO", "3D", "SIDE", "4K"
+        "yaw_deg": 15.0,
+        "pitch_deg": 8.0,
         "distance": scene_data.default_distance,
-        "min_dist": 0.20,
-        "max_dist": 22.0,
+        "min_dist": 0.40,
+        "max_dist": 8.0,
         "pan_x": 0.0,
         "pan_y": 0.0,
         "zoom_2d": 1.0,
