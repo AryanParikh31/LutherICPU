@@ -1241,6 +1241,76 @@ class SIBRSimulationEngine {
     if (gtImg && cam.img_name) {
       gtImg.src = `/api/scene/reference_photo/${cam.img_name}`;
     }
+
+    // Dynamic High-Resolution DSLR Photographic Projection (ULR)
+    if (cam.img_name) {
+      this.updateProjectiveUVsForCamera(cam);
+      const photoUrl = `/api/scene/reference_photo/${cam.img_name}`;
+      if (!this.cachedTextures) this.cachedTextures = {};
+      if (this.cachedTextures[photoUrl]) {
+        if (this.meshObject && this.meshObject.material) {
+          this.meshObject.material.map = this.cachedTextures[photoUrl];
+          this.meshObject.material.needsUpdate = true;
+        }
+      } else {
+        const texLoader = new THREE.TextureLoader();
+        texLoader.load(photoUrl, (tex) => {
+          tex.wrapS = THREE.ClampToEdgeWrapping;
+          tex.wrapT = THREE.ClampToEdgeWrapping;
+          tex.minFilter = THREE.LinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          this.cachedTextures[photoUrl] = tex;
+          if (this.currentCameraIdx === this.calibratedCameras.indexOf(cam) && this.meshObject && this.meshObject.material) {
+            this.meshObject.material.map = tex;
+            this.meshObject.material.needsUpdate = true;
+          }
+        });
+      }
+    }
+  }
+
+  updateProjectiveUVsForCamera(cam) {
+    if (!this.meshObject || !this.meshObject.geometry || !cam) return;
+    const posAttr = this.meshObject.geometry.attributes.position;
+    const uvAttr = this.meshObject.geometry.attributes.uv;
+    if (!posAttr || !uvAttr || !cam.rotation || !cam.position) return;
+
+    const count = posAttr.count;
+    const uvs = uvAttr.array;
+    const cX = this.sceneCenter.x, cY = this.sceneCenter.y, cZ = this.sceneCenter.z;
+    const R = cam.rotation;
+    const pos = cam.position;
+    const fx = cam.fx || 1265.4;
+    const fy = cam.fy || 1265.4;
+    const w = cam.width || 1332;
+    const h = cam.height || 876;
+
+    for (let i = 0; i < count; i++) {
+      const x = posAttr.getX(i);
+      const y = posAttr.getY(i);
+      const z = posAttr.getZ(i);
+
+      // Convert from Three.js centered coordinates back to COLMAP world space
+      const wx = x + cX;
+      const wy = -y + cY;
+      const wz = -z + cZ;
+
+      const dx = wx - pos[0];
+      const dy = wy - pos[1];
+      const dz = wz - pos[2];
+
+      const cx_cam = R[0][0] * dx + R[0][1] * dy + R[0][2] * dz;
+      const cy_cam = R[1][0] * dx + R[1][1] * dy + R[1][2] * dz;
+      const cz_cam = R[2][0] * dx + R[2][1] * dy + R[2][2] * dz;
+
+      if (cz_cam > 0.05) {
+        const u = (fx * (cx_cam / cz_cam) + w * 0.5) / w;
+        const v = 1.0 - ((fy * (cy_cam / cz_cam) + h * 0.5) / h);
+        uvs[i * 2]     = Math.max(0.0, Math.min(1.0, u));
+        uvs[i * 2 + 1] = Math.max(0.0, Math.min(1.0, v));
+      }
+    }
+    uvAttr.needsUpdate = true;
   }
 
   toggleNavMode() {

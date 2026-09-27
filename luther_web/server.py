@@ -403,6 +403,36 @@ def get_solid_mesh_texture(filename: Optional[str] = None, scene_id: str = "defa
     raise HTTPException(status_code=404, detail="Texture atlas not found.")
 
 
+@app.get("/api/scene/reference_photo/{img_name}")
+def get_reference_photo(img_name: str):
+    """Returns source DSLR photograph for real-time Unstructured Lumigraph Rendering (ULR)."""
+    # 1. Check cameras.json for direct image_path
+    cam_json = find_asset_file(["cameras.json", "drjohnson_cameras.json"], asset_type="cameras_json_path")
+    if cam_json and os.path.exists(cam_json):
+        try:
+            with open(cam_json, "r") as f:
+                cams = json.load(f)
+                for c in cams:
+                    if (c.get("img_name") == img_name or os.path.basename(c.get("image_path", "")) == img_name) and c.get("image_path") and os.path.exists(c["image_path"]):
+                        return FileResponse(c["image_path"], media_type="image/jpeg")
+        except Exception:
+            pass
+
+    # 2. Check common dataset paths and local folders
+    cands = [
+        os.path.join(r"F:\tandt_db\db\drjohnson\images", img_name),
+        os.path.join(r"F:\tandt_db\db\playroom\images", img_name),
+        os.path.join(r"F:\tandt_db\db\truck\images", img_name),
+        os.path.join(WORKSPACE_ROOT, "ref_frames", img_name),
+        os.path.join(OUTPUT_DIR, "ref_frames", img_name),
+        os.path.join(UPLOADS_DIR, img_name)
+    ]
+    for c in cands:
+        if os.path.exists(c):
+            return FileResponse(c, media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail=f"Reference photo '{img_name}' not found.")
+
+
 @app.get("/api/scene/manifest/{scene_name}")
 @app.get("/api/scene/{scene_name}/data")
 @app.get("/api/scene/{scene_name}")
