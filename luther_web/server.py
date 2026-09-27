@@ -348,8 +348,8 @@ def get_scene_3dgs_ply(scene_id: str = "default"):
 def get_scene_packed_buffer(scene_id: str = "default"):
     """Returns direct GPU-ready packed binary buffer for instant <15ms WebGL rendering."""
     candidates = [
-        f"{scene_id}_3dgs.splat",
-        "truck_photos_3dgs.splat",
+        f"{scene_id}_cleaned.bin",
+        "drjohnson_cleaned.bin",
         f"{scene_id}_simulation.bin",
         "truck_photos_simulation.bin",
         "truck_simulation.bin",
