@@ -23,6 +23,7 @@ __all__ = [
     "compute_fundamental_matrix",
     "triangulate_two_views",
     "load_colmap_model",
+    "export_colmap_sparse",
     "ImageQualityController",
     "compute_laplacian_variance",
     "compute_sha256",
@@ -47,10 +48,11 @@ def __getattr__(name: str):
         val = getattr(camera, name)
         globals()[name] = val
         return val
-    elif name == "load_colmap_model":
-        from luther_core.colmap_loader import load_colmap_model
-        globals()[name] = load_colmap_model
-        return load_colmap_model
+    elif name in ("load_colmap_model", "export_colmap_sparse"):
+        from luther_core import colmap_loader
+        val = getattr(colmap_loader, name)
+        globals()[name] = val
+        return val
     elif name in ("ImageQualityController", "compute_laplacian_variance", "compute_sha256"):
         from luther_core import ingestion
         val = getattr(ingestion, name)

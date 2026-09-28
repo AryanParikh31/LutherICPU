@@ -123,27 +123,43 @@ class ImageQualityController:
     def ingest_dataset(
         self,
         images_dir: str,
-        supported_extensions: Tuple[str, ...] = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
+        supported_extensions: Tuple[str, ...] = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
     ) -> Dict[str, Any]:
         """
-        Ingests all photographs from a folder, runs QC, and generates manifest.
+        Ingests all photographs from a folder (or its subfolders), runs QC, and generates manifest.
         """
         if not os.path.isdir(images_dir):
             raise NotADirectoryError(f"Directory not found: {images_dir}")
 
-        # Check if images are inside an 'images' subfolder
-        sub_img = os.path.join(images_dir, "images")
-        if os.path.isdir(sub_img) and not any(f.lower().endswith(supported_extensions) for f in os.listdir(images_dir)):
-            images_dir = sub_img
+        exts = tuple(e.lower() for e in supported_extensions)
 
+        # 1. First check directly in images_dir
         image_files = sorted([
             os.path.join(images_dir, f)
             for f in os.listdir(images_dir)
-            if f.lower().endswith(supported_extensions)
+            if f.lower().endswith(exts) and os.path.isfile(os.path.join(images_dir, f))
         ])
 
+        # 2. If none found, check subfolder 'images' or recursive search
         if not image_files:
-            raise ValueError(f"No valid images found in {images_dir} with extensions {supported_extensions}")
+            sub_img = os.path.join(images_dir, "images")
+            if os.path.isdir(sub_img):
+                image_files = sorted([
+                    os.path.join(sub_img, f)
+                    for f in os.listdir(sub_img)
+                    if f.lower().endswith(exts) and os.path.isfile(os.path.join(sub_img, f))
+                ])
+
+        # 3. If still none found, recursively scan all subdirectories
+        if not image_files:
+            for root, dirs, files in os.walk(images_dir):
+                for f in files:
+                    if f.lower().endswith(exts):
+                        image_files.append(os.path.join(root, f))
+            image_files.sort()
+
+        if not image_files:
+            raise ValueError(f"No valid images found in '{images_dir}' or subdirectories with extensions {supported_extensions}")
 
         logger.info(f"Stage 1: Ingesting and QC analyzing {len(image_files)} photographs from '{images_dir}'...")
 
