@@ -8,6 +8,7 @@ import sys
 import time
 import json
 import logging
+from typing import Dict, Any, List, Optional
 import numpy as np
 from PIL import Image
 

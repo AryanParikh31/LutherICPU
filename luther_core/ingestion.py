@@ -12,6 +12,9 @@ Implements:
 """
 
 import os
+import sys
+import json
+import argparse
 import hashlib
 import logging
 from typing import Dict, Any, List, Optional, Tuple
@@ -169,3 +172,42 @@ class ImageQualityController:
             "records": qc_records,
             "image_paths": [r["filepath"] for r in qc_records]
         }
+
+
+def main():
+    """CLI entrypoint for Stage 1 Camera Ingestion and QC."""
+    parser = argparse.ArgumentParser(description="LutherICPU Native Image Ingestion & Quality Control (QC)")
+    parser.add_argument("--images", "-i", required=True, help="Path to input dataset images folder")
+    parser.add_argument("--output", "-o", default="./scene_output", help="Path to output directory for QC reports")
+    parser.add_argument("--blur-threshold", "-b", type=float, default=60.0, help="Laplacian variance threshold for blur detection (default: 60.0)")
+    args = parser.parse_args()
+
+    os.makedirs(args.output, exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+    print("=" * 80)
+    print("[lutherICPU] Stage 1: Native Camera Ingestion & Forensic Quality Control")
+    print("=" * 80)
+    print(f"[*] Ingesting images from: {args.images}")
+    print(f"[*] Output directory:     {args.output}")
+    print(f"[*] Blur threshold:       {args.blur_threshold}")
+
+    controller = ImageQualityController(blur_threshold=args.blur_threshold)
+    manifest = controller.ingest_dataset(args.images)
+
+    manifest_path = os.path.join(args.output, "ingestion_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+    print("\n" + "=" * 80)
+    print("[SUCCESS] Stage 1 Ingestion & Quality Control Completed!")
+    print(f"Total Ingested Images: {manifest['total_images']}")
+    print(f"Flagged (Blurry/Warn): {manifest['flagged_images']}")
+    print(f"Average Blur Score:    {manifest['average_blur_score']:.2f}")
+    print(f"Ingestion Manifest:    {manifest_path}")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()
+

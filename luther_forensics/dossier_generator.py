@@ -6,7 +6,7 @@ evidence exhibits, witness perspectives, and mathematical uncertainty error boun
 import os
 import time
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 from luther_forensics.evidence_manager import EvidenceManager
 
 logger = logging.getLogger("lutherICPU.DossierGenerator")
