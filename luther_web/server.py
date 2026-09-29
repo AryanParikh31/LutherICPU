@@ -287,6 +287,16 @@ def get_scene_mtl(scene_id: str = "default"):
     raise HTTPException(status_code=404, detail="MTL definition not found.")
 
 
+@app.get("/api/scene/manifest")
+@app.get("/api/scene/info")
+def get_scene_manifest():
+    """Returns the current simulation manifest metadata."""
+    manifest = get_latest_simulation_manifest()
+    if manifest:
+        return JSONResponse(content=manifest)
+    return JSONResponse(content={"scene_name": "drjohnson", "status": "READY"})
+
+
 @app.get("/api/scene/splat")
 @app.get("/api/scene/{scene_id}/splat")
 def get_scene_splat_buffer(scene_id: str = "default"):

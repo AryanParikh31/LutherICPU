@@ -115,8 +115,11 @@ class SIBRSimulationEngine {
     this.fpsYaw = 0;
     this.fpsPitch = 0;
 
-    // Rendering Tuning & Modes
-    this.splatScale = 0.85; // 0.85x ensures razor-sharp micro-textures without oversized circles
+    // Rendering Tuning & Modes (Authentic 3DGS Gaussian Radiance Formulation)
+    this.splatScale = 1.0; // 100% natural physical scale from 30,000 iterations
+    this.lodEnabled = false; // Full photorealistic density (5.14M splats)
+    this.lodTargetCount = 1500000;
+    this.rawFullData = null;
     this.exposure = 1.0;
     this.fov = 54.0;
     this.renderMode = 0; // 0: Radiance, 1: Depth, 2: Normals, 3: Conics, 4: Mesh
@@ -306,6 +309,21 @@ class SIBRSimulationEngine {
   async loadScene() {
     this.updateLoadingStatus("Streaming 3D Gaussian Radiance Field...");
 
+    // 0. Fetch Scene Metadata
+    try {
+      const infoRes = await fetch("/api/scene/info");
+      if (infoRes.ok) {
+        const info = await infoRes.json();
+        if (info.scene_name) {
+          this.sceneName = info.scene_name;
+          const badgeScene = document.getElementById("badge-scene-name");
+          if (badgeScene) badgeScene.textContent = info.scene_name.toUpperCase();
+        }
+      }
+    } catch (e) {
+      console.warn("[SIBR] Scene info notice:", e);
+    }
+
     // 1. Fetch Calibrated Cameras
     try {
       const camRes = await fetch("/api/cameras");
@@ -331,11 +349,12 @@ class SIBRSimulationEngine {
         loader.style.opacity = "0";
         setTimeout(() => loader.style.display = "none", 400);
       }
-      // Auto-snap to first calibrated camera and activate 100% solid textured mesh
+      // Auto-snap to prime central calibrated camera
       if (this.calibratedCameras && this.calibratedCameras.length > 0) {
+        const bestIdx = Math.min(Math.floor(this.calibratedCameras.length * 0.45), this.calibratedCameras.length - 1);
         setTimeout(() => {
-          this.applyCalibratedCamera(0);
-          this.setRenderMode(4); // Default to 100% Solid 4K Textured Mesh (0% dots, 60 FPS locked)
+          this.applyCalibratedCamera(bestIdx);
+          this.setRenderMode(0); // 3D Gaussian Radiance Mode (60 FPS Turbo LOD)
         }, 150);
       }
     } else {
@@ -848,7 +867,9 @@ class SIBRSimulationEngine {
 
     this.splatCount = count;
 
-    // Robust 5th-95th Percentile Bounding Box to eliminate peripheral floaters
+    this.rawFullData = { pos, scale, rot, col, count };
+
+    // 1. Calculate robust scene bounding box & center
     const sampleStep = Math.max(1, Math.floor(count / 5000));
     const sampleX = [], sampleY = [], sampleZ = [];
     for (let i = 0; i < count; i += sampleStep) {
@@ -860,37 +881,86 @@ class SIBRSimulationEngine {
     sampleY.sort((a, b) => a - b);
     sampleZ.sort((a, b) => a - b);
 
-    const idx05 = Math.floor(sampleX.length * 0.05);
-    const idx95 = Math.floor(sampleX.length * 0.95);
-    const minX = sampleX[idx05], maxX = sampleX[idx95];
-    const minY = sampleY[idx05], maxY = sampleY[idx95];
-    const minZ = sampleZ[idx05], maxZ = sampleZ[idx95];
+    const idx02 = Math.floor(sampleX.length * 0.02);
+    const idx98 = Math.floor(sampleX.length * 0.98);
+    const minX = sampleX[idx02], maxX = sampleX[idx98];
+    const minY = sampleY[idx02], maxY = sampleY[idx98];
+    const minZ = sampleZ[idx02], maxZ = sampleZ[idx98];
 
     const cX = (minX + maxX) * 0.5;
     const cY = (minY + maxY) * 0.5;
     const cZ = (minZ + maxZ) * 0.5;
     this.sceneCenter.set(cX, cY, cZ);
 
-    const extX = maxX - minX;
-    const extY = maxY - minY;
-    const extZ = maxZ - minZ;
-    this.sceneRadius = Math.max(1.5, Math.min(25.0, 0.5 * Math.sqrt(extX * extX + extY * extY + extZ * extZ)));
+    const maxExt = Math.max(3.0, Math.sqrt((maxX - minX)**2 + (maxY - minY)**2 + (maxZ - minZ)**2) * 0.75);
+    this.sceneRadius = Math.max(1.5, Math.min(25.0, maxExt));
 
-    const centeredPos = new Float32Array(count * 3);
-    const normalColors = new Float32Array(count * 3);
-
+    // 2. Intelligent Floater Filter (Removes unconstrained peripheral floaters & zero-opacity artifacts)
+    const maxDistSq = maxExt * maxExt * 1.44; // 1.2x radius cutoff
+    const inlierIndices = [];
     for (let i = 0; i < count; i++) {
       const dx = pos[i * 3] - cX;
-      const dy = -(pos[i * 3 + 1] - cY);
-      const dz = -(pos[i * 3 + 2] - cZ);
+      const dy = pos[i * 3 + 1] - cY;
+      const dz = pos[i * 3 + 2] - cZ;
+      const dSq = dx * dx + dy * dy + dz * dz;
+      const alpha = col[i * 4 + 3];
+      const sMax = Math.max(scale[i * 3], scale[i * 3 + 1], scale[i * 3 + 2]);
+      if (dSq <= maxDistSq && alpha >= 0.04 && sMax <= 0.6) {
+        inlierIndices.push(i);
+      }
+    }
+
+    const inlierCount = inlierIndices.length > 0 ? inlierIndices.length : count;
+    console.log(`[SIBR] Retained ${inlierCount.toLocaleString()} / ${count.toLocaleString()} inlier Gaussians (peripheral floaters culled).`);
+
+    // 3. 60 FPS LOD Engine: Subsamples to active budget if enabled
+    let activeIndices = inlierIndices.length > 0 ? inlierIndices : Array.from({length: count}, (_, i) => i);
+    let scaleMultiplier = 1.0;
+    if (this.lodEnabled && inlierCount > this.lodTargetCount) {
+      const stride = inlierCount / this.lodTargetCount;
+      const lod = [];
+      for (let i = 0; i < this.lodTargetCount; i++) {
+        lod.push(activeIndices[Math.floor(i * stride)]);
+      }
+      activeIndices = lod;
+      scaleMultiplier = Math.cbrt(inlierCount / this.lodTargetCount);
+      console.log(`[SIBR] 60 FPS Turbo LOD Active: Streaming ${activeIndices.length.toLocaleString()} splats (scale boost: ${scaleMultiplier.toFixed(2)}x).`);
+    }
+
+    const activeCount = activeIndices.length;
+    this.splatCount = activeCount;
+
+    const centeredPos = new Float32Array(activeCount * 3);
+    const activeScale = new Float32Array(activeCount * 3);
+    const activeRot = new Float32Array(activeCount * 4);
+    const activeCol = new Float32Array(activeCount * 4);
+    const normalColors = new Float32Array(activeCount * 3);
+
+    for (let i = 0; i < activeCount; i++) {
+      const src = activeIndices[i];
+      const dx = pos[src * 3] - cX;
+      const dy = -(pos[src * 3 + 1] - cY);
+      const dz = -(pos[src * 3 + 2] - cZ);
 
       centeredPos[i * 3]     = dx;
       centeredPos[i * 3 + 1] = dy;
       centeredPos[i * 3 + 2] = dz;
 
-      // Coordinate-aligned Normal extraction from quaternion (w, x, y, z)
-      const qw = rot[i * 4], qx = rot[i * 4 + 1], qy = rot[i * 4 + 2], qz = rot[i * 4 + 3];
-      // Reflect y and z for Three.js coordinates
+      activeScale[i * 3]     = scale[src * 3] * scaleMultiplier;
+      activeScale[i * 3 + 1] = scale[src * 3 + 1] * scaleMultiplier;
+      activeScale[i * 3 + 2] = scale[src * 3 + 2] * scaleMultiplier;
+
+      activeRot[i * 4]     = rot[src * 4];
+      activeRot[i * 4 + 1] = rot[src * 4 + 1];
+      activeRot[i * 4 + 2] = rot[src * 4 + 2];
+      activeRot[i * 4 + 3] = rot[src * 4 + 3];
+
+      activeCol[i * 4]     = col[src * 4];
+      activeCol[i * 4 + 1] = col[src * 4 + 1];
+      activeCol[i * 4 + 2] = col[src * 4 + 2];
+      activeCol[i * 4 + 3] = col[src * 4 + 3];
+
+      const qw = rot[src * 4], qx = rot[src * 4 + 1], qy = rot[src * 4 + 2], qz = rot[src * 4 + 3];
       const nx = 2.0 * (qx * qz + qw * qy);
       const ny = -(2.0 * (qy * qz - qw * qx));
       const nz = -(1.0 - 2.0 * (qx * qx + qy * qy));
@@ -901,13 +971,13 @@ class SIBRSimulationEngine {
 
     // Retain original buffers for Radix sorting
     this.rawPositions = centeredPos;
-    this.rawScales = scale;
-    this.rawRotations = rot;
-    this.rawColors = col;
+    this.rawScales = activeScale;
+    this.rawRotations = activeRot;
+    this.rawColors = activeCol;
     this.rawNormals = normalColors;
 
     // Initialize Radix Sorter with 3D positions
-    this.sorter.initPositions(centeredPos, count);
+    this.sorter.initPositions(centeredPos, activeCount);
 
     // Quad Geometry (4 vertices, 2 triangles)
     const quadVertices = new Float32Array([
@@ -919,14 +989,14 @@ class SIBRSimulationEngine {
     const quadIndices = new Uint16Array([0, 1, 2, 2, 1, 3]);
 
     const geo = new THREE.InstancedBufferGeometry();
-    geo.instanceCount = count;
+    geo.instanceCount = activeCount;
     geo.setAttribute("position", new THREE.BufferAttribute(quadVertices, 3));
     geo.setIndex(new THREE.BufferAttribute(quadIndices, 1));
 
     geo.setAttribute("a_position", new THREE.InstancedBufferAttribute(new Float32Array(centeredPos), 3));
-    geo.setAttribute("a_scale", new THREE.InstancedBufferAttribute(new Float32Array(scale), 3));
-    geo.setAttribute("a_rotation", new THREE.InstancedBufferAttribute(new Float32Array(rot), 4));
-    geo.setAttribute("a_color", new THREE.InstancedBufferAttribute(new Float32Array(col), 4));
+    geo.setAttribute("a_scale", new THREE.InstancedBufferAttribute(new Float32Array(activeScale), 3));
+    geo.setAttribute("a_rotation", new THREE.InstancedBufferAttribute(new Float32Array(activeRot), 4));
+    geo.setAttribute("a_color", new THREE.InstancedBufferAttribute(new Float32Array(activeCol), 4));
     geo.setAttribute("a_normalColor", new THREE.InstancedBufferAttribute(new Float32Array(normalColors), 3));
 
     this.instancedGeometry = geo;
@@ -984,17 +1054,14 @@ class SIBRSimulationEngine {
           v_depth = depth;
 
           // Frustum near-plane & far-plane clipping
-          if (cam_pos.z >= -0.15 || depth >= 300.0) {
+          if (cam_pos.z >= -0.05 || depth >= 400.0) {
             gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
             return;
           }
 
           // 3D Covariance in World Space: Sigma_world = (T*R*T) * S * S^T * (T*R*T)^T
           mat3 R_three = buildTransformedRotation(a_rotation);
-          // Smooth 3D Gaussian Radiance Formulation (eliminates flat leaf/wood-flake distortion)
-          float s_mean = (a_scale.x + a_scale.y + a_scale.z) * 0.33333;
-          vec3 eff_scale = mix(a_scale, vec3(s_mean), 0.70) * u_splatScale;
-          eff_scale = max(eff_scale, vec3(0.003));
+          vec3 eff_scale = a_scale * u_splatScale;
           mat3 S = mat3(
             eff_scale.x, 0.0, 0.0,
             0.0, eff_scale.y, 0.0,
@@ -1018,8 +1085,8 @@ class SIBRSimulationEngine {
           float cov_raw_11 = dot(J1, V_cam * J1);
           float cov_raw_01 = dot(J0, V_cam * J1);
 
-          // EWA Anti-aliasing low-pass filter dilation (+0.25px low-pass kernel)
-          float s_filter = 0.25;
+          // Anti-aliasing low-pass filter dilation (+0.3px kernel)
+          float s_filter = 0.3;
           float cov00 = cov_raw_00 + s_filter;
           float cov11 = cov_raw_11 + s_filter;
           float cov01 = cov_raw_01;
@@ -1035,26 +1102,23 @@ class SIBRSimulationEngine {
 
           // 2D Screen Radius Calculation (3-sigma confidence)
           float mid = 0.5 * (cov00 + cov11);
-          float lambda = mid + sqrt(max(0.001, mid * mid - det));
-          float radius = ceil(3.0 * sqrt(max(0.001, lambda)));
-          radius = clamp(radius, 0.75, 14.0);
+          float lambda = mid + sqrt(max(0.1, mid * mid - det));
+          float radius = ceil(3.0 * sqrt(max(0.1, lambda)));
+          radius = clamp(radius, 1.0, 1024.0);
 
           vec2 screen_offset = position.xy * radius;
           vec4 proj_pos = projectionMatrix * cam_pos;
           proj_pos.xy += (screen_offset / u_viewport) * proj_pos.w * 2.0;
 
-          // Frustum culling: discard splats outside screen bounding box to save 70% fillrate
-          if (abs(proj_pos.x) > proj_pos.w * 1.15 || abs(proj_pos.y) > proj_pos.w * 1.15) {
+          // Frustum culling: discard splats outside screen bounding box
+          if (abs(proj_pos.x) > proj_pos.w * 1.25 || abs(proj_pos.y) > proj_pos.w * 1.25) {
             gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
             return;
           }
 
-          // Near plane soft fade
-          float nearFade = smoothstep(0.15, 0.45, depth);
-
           v_quad_pos = position.xy;
           v_quad_offset = screen_offset;
-          v_color = vec4(a_color.rgb * u_exposure, a_color.a * nearFade);
+          v_color = vec4(a_color.rgb * u_exposure, a_color.a);
           v_normalColor = a_normalColor;
           gl_Position = proj_pos;
         }
@@ -1069,20 +1133,16 @@ class SIBRSimulationEngine {
         uniform int u_renderMode;
 
         void main() {
-          // Circular disc boundary mask
-          float r2 = dot(v_quad_pos, v_quad_pos);
-          if (r2 > 1.0) discard;
-
-          // Exact 2D Gaussian Conic Quadratic Exponential Falloff
+          // Quadratic exponential falloff from 2D conic: -0.5 * d^T * Conic * d
           float power = -0.5 * (v_conic.x * v_quad_offset.x * v_quad_offset.x + 
                                 2.0 * v_conic.y * v_quad_offset.x * v_quad_offset.y + 
                                 v_conic.z * v_quad_offset.y * v_quad_offset.y);
 
-          if (power < -4.2) discard;
+          if (power < -4.5 || power > 0.0) discard;
 
           // Smooth continuous Gaussian radiance blending
-          float alpha = clamp(v_color.a * exp(power), 0.0, 0.99);
-          if (alpha < 0.02) discard;
+          float alpha = min(0.99, v_color.a * exp(power));
+          if (alpha < 0.01) discard;
 
           vec3 baseColor = v_color.rgb;
           if (u_renderMode == 1) {
@@ -1126,10 +1186,10 @@ class SIBRSimulationEngine {
 
     const badgeSurfel = document.getElementById("badge-surfel-count");
     if (badgeSurfel) {
-      if (count >= 1000000) {
-        badgeSurfel.textContent = `${(count / 1000000).toFixed(2)}M Splats`;
+      if (activeCount >= 1000000) {
+        badgeSurfel.textContent = `${(activeCount / 1000000).toFixed(2)}M Splats`;
       } else {
-        badgeSurfel.textContent = `${(count / 1000).toFixed(0)}k Splats`;
+        badgeSurfel.textContent = `${(activeCount / 1000).toFixed(0)}k Splats`;
       }
     }
 
@@ -1155,12 +1215,18 @@ class SIBRSimulationEngine {
 
     const count = this.splatCount;
     const posAttr = this.instancedGeometry.attributes.a_position.array;
+    const scaleAttr = this.instancedGeometry.attributes.a_scale.array;
+    const rotAttr = this.instancedGeometry.attributes.a_rotation.array;
     const colAttr = this.instancedGeometry.attributes.a_color.array;
+    const normAttr = this.instancedGeometry.attributes.a_normalColor.array;
 
     const rawP = this.rawPositions;
+    const rawS = this.rawScales;
+    const rawR = this.rawRotations;
     const rawC = this.rawColors;
+    const rawN = this.rawNormals;
 
-    // Ultra-Fast 60 FPS back-to-front buffer reordering (positions & colors only)
+    // Back-to-front buffer reordering (all attributes synchronized)
     for (let i = 0; i < count; i++) {
       const src = sortedIndices[i];
       const i3 = i * 3;
@@ -1172,14 +1238,30 @@ class SIBRSimulationEngine {
       posAttr[i3 + 1] = rawP[src3 + 1];
       posAttr[i3 + 2] = rawP[src3 + 2];
 
+      scaleAttr[i3]     = rawS[src3];
+      scaleAttr[i3 + 1] = rawS[src3 + 1];
+      scaleAttr[i3 + 2] = rawS[src3 + 2];
+
+      rotAttr[i4]     = rawR[src4];
+      rotAttr[i4 + 1] = rawR[src4 + 1];
+      rotAttr[i4 + 2] = rawR[src4 + 2];
+      rotAttr[i4 + 3] = rawR[src4 + 3];
+
       colAttr[i4]     = rawC[src4];
       colAttr[i4 + 1] = rawC[src4 + 1];
       colAttr[i4 + 2] = rawC[src4 + 2];
       colAttr[i4 + 3] = rawC[src4 + 3];
+
+      normAttr[i3]     = rawN[src3];
+      normAttr[i3 + 1] = rawN[src3 + 1];
+      normAttr[i3 + 2] = rawN[src3 + 2];
     }
 
     this.instancedGeometry.attributes.a_position.needsUpdate = true;
+    this.instancedGeometry.attributes.a_scale.needsUpdate = true;
+    this.instancedGeometry.attributes.a_rotation.needsUpdate = true;
     this.instancedGeometry.attributes.a_color.needsUpdate = true;
+    this.instancedGeometry.attributes.a_normalColor.needsUpdate = true;
   }
 
   applyCalibratedCamera(camIdx) {
@@ -1376,6 +1458,40 @@ class SIBRSimulationEngine {
     }
   }
 
+  setSplatScale(scale) {
+    this.splatScale = parseFloat(scale);
+    if (this.splatMaterial && this.splatMaterial.uniforms && this.splatMaterial.uniforms.u_splatScale) {
+      this.splatMaterial.uniforms.u_splatScale.value = this.splatScale;
+    }
+    const valDisplay = document.getElementById("splat-scale-val");
+    if (valDisplay) {
+      valDisplay.textContent = `${this.splatScale.toFixed(2)}x`;
+    }
+    const slider = document.getElementById("splat-scale-slider");
+    if (slider && parseFloat(slider.value) !== this.splatScale) {
+      slider.value = this.splatScale;
+    }
+  }
+
+  toggleLOD() {
+    this.lodEnabled = !this.lodEnabled;
+    const btn = document.getElementById("btn-lod-toggle");
+    const label = document.getElementById("lod-btn-label");
+    if (btn) btn.classList.toggle("active", this.lodEnabled);
+    if (label) {
+      label.textContent = this.lodEnabled ? "60 FPS Turbo" : "Cinema (5.1M)";
+    }
+    if (this.rawFullData) {
+      this.setupGaussianField(
+        this.rawFullData.pos,
+        this.rawFullData.scale,
+        this.rawFullData.rot,
+        this.rawFullData.col,
+        this.rawFullData.count
+      );
+    }
+  }
+
   toggleHelpModal() {
     const modal = document.getElementById("sibr-help-modal");
     if (modal) {
@@ -1468,6 +1584,8 @@ function resetCamera() { if (simEngine) simEngine.resetCamera(); }
 function setRenderMode(mode) { if (simEngine) simEngine.setRenderMode(mode); }
 function toggleGTPeek() { if (simEngine) simEngine.toggleGTPeek(); }
 function toggleHelpModal() { if (simEngine) simEngine.toggleHelpModal(); }
+function setSplatScale(val) { if (simEngine) simEngine.setSplatScale(val); }
+function toggleLOD() { if (simEngine) simEngine.toggleLOD(); }
 
 window.addEventListener("DOMContentLoaded", () => {
   simEngine = new SIBRSimulationEngine();

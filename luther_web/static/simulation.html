@@ -123,6 +123,27 @@
       background: rgba(0, 240, 255, 0.25);
       border-color: #00f0ff;
       color: #00f0ff;
+      box-shadow: 0 0 12px rgba(0, 240, 255, 0.2);
+    }
+
+    .sibr-slider-pill {
+      background: rgba(10, 15, 29, 0.78);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #cbd5e1;
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      transition: all 0.2s ease;
+    }
+    .sibr-slider-pill:hover {
+      border-color: rgba(0, 240, 255, 0.5);
+      box-shadow: 0 0 10px rgba(0, 240, 255, 0.15);
     }
 
     /* SIBR Mode Quick Selector (Bottom Center Pill) */
@@ -289,6 +310,19 @@
 
   <!-- Discreet Top-Right Action Buttons -->
   <div class="sibr-top-actions">
+    <!-- Fine-Grained Splat Scale Slider -->
+    <div class="sibr-slider-pill" title="Fine-tune 3D Gaussian Radiance Ellipsoid Scale">
+      <span style="font-size: 0.72rem; color: #94a3b8; font-weight: 600;">Scale</span>
+      <input type="range" id="splat-scale-slider" min="0.20" max="2.00" step="0.05" value="1.00" oninput="setSplatScale(this.value)" style="width: 60px; height: 4px; cursor: pointer; accent-color: #00f0ff;">
+      <span id="splat-scale-val" class="hud-val" style="font-size: 0.72rem;">1.00x</span>
+    </div>
+
+    <!-- 60 FPS Turbo / Cinema LOD Switch -->
+    <button id="btn-lod-toggle" class="sibr-btn-pill" onclick="toggleLOD()" title="Toggle Real-Time 60 FPS Turbo (1.5M budget) vs Full Density (5.14M splats)">
+      <span>💎</span>
+      <span id="lod-btn-label">Cinema (5.1M)</span>
+    </button>
+
     <button class="sibr-btn-pill" onclick="toggleTurntable()" title="360° Continuous Orbit (Key: O)">
       <span>🎬</span>
       <span id="btn-orbit-label">Orbit 360°</span>

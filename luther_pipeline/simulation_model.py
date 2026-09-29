@@ -407,35 +407,78 @@ class LutherICPU:
                 combined_colors = np.vstack([combined_colors, thinned_cols])
 
         # Multi-View Photometric Training & Adaptive Detail Densification
-        emit_progress(int(iterations * 0.84), "Stage 5/5: Multi-View Photometric Training & Adaptive Densification (Carpet, Paintings, Moldings)...")
-        opt_pos, opt_col, opt_opac, opt_scales = self.trainer.optimize_and_densify(
-            positions=combined_positions,
-            colors=combined_colors,
-            camera_views=all_views,
-            num_epochs=3,
-            densify_target=3_800_000,
-            voxel_size=0.005
-        )
-        combined_positions = opt_pos
-        combined_colors = opt_col
+        has_cuda = False
+        try:
+            import torch
+            has_cuda = torch.cuda.is_available()
+        except Exception:
+            has_cuda = False
 
-        emit_progress(int(iterations * 0.89), f"Stage 5/5: Generating High-Definition 3D Gaussian Field ({len(combined_positions):,} Splats)...")
-        gs_field = self.gs_engine.generate_gaussian_field(
-            positions=combined_positions,
-            colors=combined_colors,
-            scales=opt_scales,
-            opacities=opt_opac
-        )
+        if has_cuda:
+            emit_progress(int(iterations * 0.84), "Stage 5/5: CUDA Hardware Acceleration Active — Running Photorealistic 3DGS Optimization on GPU...")
+            try:
+                from luther_core.cuda_gaussian_trainer import CUDAGaussianTrainer
+                cam_dicts = [
+                    {
+                        "image_path": v.image_path,
+                        "img_name": v.image_name,
+                        "position": v.center.tolist(),
+                        "rotation": v.R.tolist(),
+                        "fx": v.intrinsics.fx,
+                        "fy": v.intrinsics.fy,
+                        "cx": v.intrinsics.cx,
+                        "cy": v.intrinsics.cy,
+                        "width": v.intrinsics.width,
+                        "height": v.intrinsics.height
+                    }
+                    for v in all_views
+                ]
+                cuda_trainer = CUDAGaussianTrainer(output_dir=str(self.output_dir))
+                cuda_res = cuda_trainer.train(
+                    images_dir=images_dir,
+                    cameras=cam_dicts,
+                    initial_points=combined_positions,
+                    initial_colors=combined_colors,
+                    iterations=iterations,
+                    scene_name=scene_name,
+                    progress_callback=emit_progress
+                )
+                ply_3dgs_path = Path(cuda_res["ply_path"])
+                splat_path = Path(cuda_res["splat_path"])
+            except Exception as cuda_err:
+                logger.warning(f"[CUDA] GPU training notice: {cuda_err}. Running CPU fallback.")
+                has_cuda = False
 
-        ply_3dgs_path = self.output_dir / f"{scene_name}_3dgs.ply"
-        splat_path = self.output_dir / f"{scene_name}_3dgs.splat"
-        self.gs_engine.export_inria_ply(gs_field, str(ply_3dgs_path))
-        self.gs_engine.export_binary_splat(gs_field, str(splat_path))
+        if not has_cuda:
+            emit_progress(int(iterations * 0.84), "Stage 5/5: Multi-View Photometric Training & Adaptive Densification (CPU Mode)...")
+            opt_pos, opt_col, opt_opac, opt_scales = self.trainer.optimize_and_densify(
+                positions=combined_positions,
+                colors=combined_colors,
+                camera_views=all_views,
+                num_epochs=3,
+                densify_target=3_800_000,
+                voxel_size=0.005
+            )
+            combined_positions = opt_pos
+            combined_colors = opt_col
 
-        # Also export standard Inria directory hierarchy (point_cloud/iteration_XXXXX/point_cloud.ply)
-        inria_pc_dir = self.output_dir / "point_cloud" / f"iteration_{iterations}"
-        inria_pc_dir.mkdir(parents=True, exist_ok=True)
-        self.gs_engine.export_inria_ply(gs_field, str(inria_pc_dir / "point_cloud.ply"))
+            emit_progress(int(iterations * 0.89), f"Stage 5/5: Generating High-Definition 3D Gaussian Field ({len(combined_positions):,} Splats)...")
+            gs_field = self.gs_engine.generate_gaussian_field(
+                positions=combined_positions,
+                colors=combined_colors,
+                scales=opt_scales,
+                opacities=opt_opac
+            )
+
+            ply_3dgs_path = self.output_dir / f"{scene_name}_3dgs.ply"
+            splat_path = self.output_dir / f"{scene_name}_3dgs.splat"
+            self.gs_engine.export_inria_ply(gs_field, str(ply_3dgs_path))
+            self.gs_engine.export_binary_splat(gs_field, str(splat_path))
+
+            # Also export standard Inria directory hierarchy (point_cloud/iteration_XXXXX/point_cloud.ply)
+            inria_pc_dir = self.output_dir / "point_cloud" / f"iteration_{iterations}"
+            inria_pc_dir.mkdir(parents=True, exist_ok=True)
+            self.gs_engine.export_inria_ply(gs_field, str(inria_pc_dir / "point_cloud.ply"))
 
         # Continuous Photographic Simulation Proof Renders (Supreme SIBR Engine)
         render_results = {}

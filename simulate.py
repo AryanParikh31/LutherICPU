@@ -27,10 +27,31 @@ if PROJECT_ROOT not in sys.path:
 
 from luther_pipeline.simulation_model import LutherICPU
 from luther_pipeline.iterative_engine import parse_iteration_count
+import shutil
 from luther_renderer.display_window import display_simulation_window
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("lutherICPU.Simulate")
+
+
+def safe_copy(src: str, dst: str):
+    """Safely copies a file, preventing self-copy and handling Windows file locks."""
+    try:
+        if not src or not os.path.exists(src):
+            return
+        abs_src = os.path.abspath(src)
+        abs_dst = os.path.abspath(dst)
+        if abs_src == abs_dst:
+            return
+        os.makedirs(os.path.dirname(abs_dst), exist_ok=True)
+        if os.path.exists(abs_dst):
+            try:
+                os.remove(abs_dst)
+            except Exception:
+                pass
+        shutil.copy2(abs_src, abs_dst)
+    except Exception as e:
+        logger.debug(f"[SafeCopy] Notice copying {src} -> {dst}: {e}")
 
 
 def configure_os_environment(windows: bool = False, linux: bool = False):
@@ -138,51 +159,110 @@ def main():
 
     # Handle Colab bundle import directly
     if args.import_bundle:
-        bundle_path = os.path.abspath(args.import_bundle)
+        raw_bundle_path = args.import_bundle.strip('\'"')
+        bundle_path = os.path.abspath(raw_bundle_path)
+        
+        # Check if user passed path without .zip extension but .zip exists
+        if not os.path.exists(bundle_path) and os.path.exists(bundle_path + ".zip"):
+            bundle_path = bundle_path + ".zip"
+
         if not os.path.exists(bundle_path):
-            print(f"[ERROR] Specified bundle path does not exist: {bundle_path}")
+            print(f"[ERROR] Specified bundle path does not exist: {raw_bundle_path}")
             sys.exit(1)
 
         out_dir = args.output or os.path.join(PROJECT_ROOT, "output", "colab_imported_simulation")
         os.makedirs(out_dir, exist_ok=True)
-        splat_dst = os.path.join(out_dir, "scene.splat")
-        root_splat_dst = os.path.join(PROJECT_ROOT, "output", "scene.splat")
+        root_output_dir = os.path.join(PROJECT_ROOT, "output")
+        os.makedirs(root_output_dir, exist_ok=True)
 
-        if bundle_path.endswith(".zip"):
+        if os.path.isfile(bundle_path) and bundle_path.endswith(".zip"):
             import zipfile
             print(f"[*] Extracting Colab simulation bundle: {os.path.basename(bundle_path)}...")
             with zipfile.ZipFile(bundle_path, 'r') as zf:
                 zf.extractall(out_dir)
-            cand_splat = os.path.join(out_dir, "scene.splat")
-            if os.path.exists(cand_splat):
-                import shutil
-                shutil.copy2(cand_splat, root_splat_dst)
+        elif os.path.isdir(bundle_path):
+            print(f"[*] Copying simulation bundle files from directory: {os.path.basename(bundle_path)}...")
+            for root, dirs, files in os.walk(bundle_path):
+                for f in files:
+                    src_f = os.path.join(root, f)
+                    rel_f = os.path.relpath(src_f, bundle_path)
+                    dst_f = os.path.join(out_dir, rel_f)
+                    safe_copy(src_f, dst_f)
         elif bundle_path.endswith((".splat", ".ply")):
-            import shutil
-            shutil.copy2(bundle_path, splat_dst)
-            shutil.copy2(bundle_path, root_splat_dst)
+            safe_copy(bundle_path, os.path.join(out_dir, os.path.basename(bundle_path)))
+
+        # Auto-discover extracted splat, mesh, and texture files
+        found_splat = None
+        found_ply = None
+        found_obj = None
+        found_atlas = None
+        found_bin = None
+
+        for root, dirs, files in os.walk(out_dir):
+            for f in files:
+                full_p = os.path.join(root, f)
+                lower_f = f.lower()
+                if lower_f.endswith(".splat") and not found_splat:
+                    found_splat = full_p
+                elif lower_f.endswith(".ply") and "3dgs" in lower_f and not found_ply:
+                    found_ply = full_p
+                elif lower_f.endswith(".obj") and not found_obj:
+                    found_obj = full_p
+                elif lower_f.endswith((".png", ".jpg", ".jpeg")) and ("atlas" in lower_f or "diffuse" in lower_f) and not found_atlas:
+                    found_atlas = full_p
+                elif lower_f.endswith(".bin") and not found_bin:
+                    found_bin = full_p
+
+        # Fallbacks if specific filenames not matched
+        if not found_ply:
+            for root, dirs, files in os.walk(out_dir):
+                for f in files:
+                    if f.lower().endswith(".ply") and "mesh" not in f.lower():
+                        found_ply = os.path.join(root, f)
+                        break
+
+        root_splat_dst = os.path.join(root_output_dir, "scene.splat")
+        if found_splat:
+            safe_copy(found_splat, root_splat_dst)
+            safe_copy(found_splat, os.path.join(out_dir, "scene.splat"))
+        elif found_ply:
+            safe_copy(found_ply, os.path.join(root_output_dir, "scene.ply"))
+
+        if found_obj:
+            safe_copy(found_obj, os.path.join(root_output_dir, "solid_mesh.obj"))
+            safe_copy(found_obj, os.path.join(out_dir, "solid_mesh.obj"))
+
+        if found_atlas:
+            safe_copy(found_atlas, os.path.join(root_output_dir, "diffuse_atlas.png"))
+            safe_copy(found_atlas, os.path.join(out_dir, "diffuse_atlas.png"))
 
         manifest_data = {
-            "scene_name": "Cloud GPU Trained Scene",
+            "scene_name": "drjohnson" if "drjohnson" in bundle_path.lower() else "Cloud GPU Trained Scene",
             "output_dir": out_dir,
-            "splat_path": root_splat_dst,
-            "source": "Google Colab 3DGS"
+            "splat_path": root_splat_dst if found_splat else (found_ply or ""),
+            "obj_path": found_obj or "",
+            "diffuse_png_path": found_atlas or "",
+            "binary_mesh_path": found_bin or "",
+            "source": "Google Colab 3DGS Model"
         }
         import json
-        with open(os.path.join(PROJECT_ROOT, "output", "latest_simulation.json"), "w") as f:
+        with open(os.path.join(root_output_dir, "latest_simulation.json"), "w") as f:
             json.dump(manifest_data, f, indent=2)
 
         print("\n" + "=" * 80)
         print(" [SUCCESS] COLAB 3D SIMULATION BUNDLE IMPORTED!")
         print(f" Target Directory: {out_dir}")
-        print(f" Active Splat:     {root_splat_dst}")
+        print(f" 3D Splat Asset:   {found_splat or found_ply or 'Auto-Detected'}")
+        print(f" OBJ Mesh Asset:   {found_obj or 'Auto-Detected'}")
+        print(f" Diffuse 4K Atlas: {found_atlas or 'Auto-Detected'}")
         print("=" * 80 + "\n")
 
-        if args.software:
-            display_simulation_window(out_dir, scene_name="Colab Scene")
-        else:
-            from luther_display import launch_interactive_3d_viewport
-            launch_interactive_3d_viewport(port=args.port)
+        if not args.no_display:
+            if args.software:
+                display_simulation_window(out_dir, scene_name="Colab Scene")
+            else:
+                from luther_display import launch_interactive_3d_viewport
+                launch_interactive_3d_viewport(port=args.port)
         return
 
     # Direct launch of interactive 3D simulation player if no training args provided
