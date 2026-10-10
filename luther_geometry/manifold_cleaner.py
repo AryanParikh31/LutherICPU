@@ -241,8 +241,8 @@ def prune_silhouette_sawtooth_triangles(
     area = np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1) * 0.5
 
     # Aspect ratio: longest_edge / (inradius = area / semi_p)
-    inradius = np.where(semi_p > 1e-6, area / semi_p, 0.0)
-    aspect_ratio = np.where(inradius > 1e-6, max_edge / inradius, 999.0)
+    inradius = np.where(semi_p > 1e-6, area / np.maximum(semi_p, 1e-8), 0.0)
+    aspect_ratio = np.where(inradius > 1e-6, max_edge / np.maximum(inradius, 1e-8), 999.0)
 
     keep_faces = aspect_ratio < max_aspect_ratio
     clean_fcs = fcs[keep_faces]

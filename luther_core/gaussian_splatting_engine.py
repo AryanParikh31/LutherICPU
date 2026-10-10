@@ -213,6 +213,7 @@ class GaussianSplattingEngine:
         """
         Exports standard Inria 3D Gaussian Splatting binary PLY format.
         Compatible with SIBR_gaussianViewer_app.exe, Nerfstudio, Three.js 3DGS, and WebGL viewers.
+        Supports Degree 0 (ambient only) up to Degree 3 (view-dependent specularities).
         """
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         N = len(field["positions"])
@@ -224,41 +225,60 @@ class GaussianSplattingEngine:
         log_scales = field["scales_log"]
         quats = field["rotations"]
 
-        header = (
-            "ply\n"
-            "format binary_little_endian 1.0\n"
-            f"element vertex {N}\n"
-            "property float x\n"
-            "property float y\n"
-            "property float z\n"
-            "property float nx\n"
-            "property float ny\n"
-            "property float nz\n"
-            "property float f_dc_0\n"
-            "property float f_dc_1\n"
-            "property float f_dc_2\n"
-            "property float opacity\n"
-            "property float scale_0\n"
-            "property float scale_1\n"
-            "property float scale_2\n"
-            "property float rot_0\n"
-            "property float rot_1\n"
-            "property float rot_2\n"
-            "property float rot_3\n"
-            "end_header\n"
-        )
+        f_rest = field.get("sh_rest", None)
+        has_rest = f_rest is not None and getattr(f_rest, "size", 0) > 0
+        if has_rest:
+            f_rest_flat = f_rest.reshape(N, -1).astype(np.float32)
+            num_rest = f_rest_flat.shape[1]
+        else:
+            num_rest = 0
 
-        # Packed binary array (62 bytes per vertex)
-        dtype = [
+        header_lines = [
+            "ply",
+            "format binary_little_endian 1.0",
+            f"element vertex {N}",
+            "property float x",
+            "property float y",
+            "property float z",
+            "property float nx",
+            "property float ny",
+            "property float nz",
+            "property float f_dc_0",
+            "property float f_dc_1",
+            "property float f_dc_2"
+        ]
+
+        for i in range(num_rest):
+            header_lines.append(f"property float f_rest_{i}")
+
+        header_lines.extend([
+            "property float opacity",
+            "property float scale_0",
+            "property float scale_1",
+            "property float scale_2",
+            "property float rot_0",
+            "property float rot_1",
+            "property float rot_2",
+            "property float rot_3",
+            "end_header\n"
+        ])
+
+        header = "\n".join(header_lines)
+
+        dtype_fields = [
             ('x', '<f4'), ('y', '<f4'), ('z', '<f4'),
             ('nx', '<f4'), ('ny', '<f4'), ('nz', '<f4'),
-            ('f_dc_0', '<f4'), ('f_dc_1', '<f4'), ('f_dc_2', '<f4'),
+            ('f_dc_0', '<f4'), ('f_dc_1', '<f4'), ('f_dc_2', '<f4')
+        ]
+        for i in range(num_rest):
+            dtype_fields.append((f'f_rest_{i}', '<f4'))
+        dtype_fields.extend([
             ('opacity', '<f4'),
             ('scale_0', '<f4'), ('scale_1', '<f4'), ('scale_2', '<f4'),
             ('rot_0', '<f4'), ('rot_1', '<f4'), ('rot_2', '<f4'), ('rot_3', '<f4')
-        ]
+        ])
 
-        data = np.empty(N, dtype=dtype)
+        data = np.empty(N, dtype=dtype_fields)
         data['x'] = pos[:, 0]
         data['y'] = pos[:, 1]
         data['z'] = pos[:, 2]
@@ -268,6 +288,11 @@ class GaussianSplattingEngine:
         data['f_dc_0'] = f_dc[:, 0]
         data['f_dc_1'] = f_dc[:, 1]
         data['f_dc_2'] = f_dc[:, 2]
+
+        if has_rest:
+            for i in range(num_rest):
+                data[f'f_rest_{i}'] = f_rest_flat[:, i]
+
         data['opacity'] = logit_opacities
         data['scale_0'] = log_scales[:, 0]
         data['scale_1'] = log_scales[:, 1]
@@ -281,7 +306,7 @@ class GaussianSplattingEngine:
             f.write(header.encode("ascii"))
             f.write(data.tobytes())
 
-        logger.info(f"Exported standard Inria 3DGS binary PLY ({N:,} Gaussians) to: {output_path}")
+        logger.info(f"Exported standard Inria 3DGS binary PLY ({N:,} Gaussians, rest_coeffs={num_rest}) to: {output_path}")
 
     def export_binary_splat(self, field: Dict[str, np.ndarray], output_path: str):
         """

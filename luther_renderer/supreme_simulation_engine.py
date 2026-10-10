@@ -306,6 +306,24 @@ class SupremeSimulationEngine:
         pts_w = pts_w[onscreen]
         cols_c = cols_c[onscreen]
 
+        # Fast screen-space grid decimation (limits Delaunay triangulation to <= 60,000 foreground points)
+        if len(u_scr) > 60000:
+            grid_res = 6.0
+            gx = (u_scr / grid_res).astype(np.int32)
+            gy = (v_scr / grid_res).astype(np.int32)
+            g_keys = gx.astype(np.int64) * 100000 + gy.astype(np.int64)
+            sort_z = np.argsort(z_c)
+            sorted_keys = g_keys[sort_z]
+            _, unique_first = np.unique(sorted_keys, return_index=True)
+            chosen_indices = sort_z[unique_first]
+            if len(chosen_indices) > 60000:
+                chosen_indices = chosen_indices[:60000]
+            u_scr = u_scr[chosen_indices]
+            v_scr = v_scr[chosen_indices]
+            z_c = z_c[chosen_indices]
+            pts_w = pts_w[chosen_indices]
+            cols_c = cols_c[chosen_indices]
+
         # 4. 2D Delaunay Triangulation with Strict Needle & Aspect-Ratio Filtering
         pts_2d = np.column_stack([u_scr, v_scr])
         tri = Delaunay(pts_2d)
