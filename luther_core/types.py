@@ -64,6 +64,11 @@ class CameraView:
         return -self.R.T @ self.tvec
 
     @property
+    def image_name(self) -> str:
+        """Alias for name for backwards and cross-engine compatibility."""
+        return self.name
+
+    @property
     def viewing_direction(self) -> np.ndarray:
         """Forward viewing direction vector in world coordinates (COLMAP: +Z is forward)."""
         return self.R.T @ np.array([0.0, 0.0, 1.0], dtype=np.float32)

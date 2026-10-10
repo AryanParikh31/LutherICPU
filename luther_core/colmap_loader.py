@@ -300,6 +300,12 @@ def load_colmap_model(sparse_dir: str, images_dir: Optional[str] = None) -> Tupl
     raise FileNotFoundError(f"Cannot find COLMAP binary (.bin) or text (.txt) files in {sparse_dir} or subfolder '0'")
 
 
+def load_colmap_views(sparse_dir: str, images_dir: Optional[str] = None) -> Tuple[List[CameraView], PointCloud]:
+    """Convenience loader returning a list of calibrated CameraView objects and PointCloud (2-tuple)."""
+    cameras, views, pcd = load_colmap_model(sparse_dir, images_dir=images_dir)
+    return list(views.values()), pcd
+
+
 def export_colmap_sparse(
     output_dir: str,
     cameras: Dict[int, CameraIntrinsics],
