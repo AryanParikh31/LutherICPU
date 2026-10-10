@@ -72,7 +72,7 @@ notebook = {
             "metadata": {},
             "source": [
                 "## 📦 Cell 2: Automated Dependency Installation\n",
-                "Installs COLMAP, FFmpeg, Ninja, PyTorch CUDA extensions, `diff-gaussian-rasterization`, and `simple-knn`."
+                "Installs COLMAP, FFmpeg, Ninja, PyTorch CUDA acceleration, `gsplat` differentiable rasterizer, and scientific 3D computer vision libraries."
             ]
         },
         {
@@ -83,16 +83,14 @@ notebook = {
             "source": [
                 "# Cell 2: Automated Dependency Installation\n",
                 "!apt-get update -qq && apt-get install -y -qq colmap ffmpeg git ninja-build cmake build-essential\n",
-                "!pip install -q --upgrade pip setuptools wheel\n",
-                "!pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cu121\n",
+                "!pip install -q \"setuptools<80\" wheel\n",
                 "\n",
                 "# Install verified Gaussian Splatting rasterizer libraries\n",
-                "print(\"[*] Building and installing CUDA rasterizer submodules...\")\n",
-                "!pip install -q git+https://github.com/graphdeco-inria/diff-gaussian-rasterization || pip install -q gsplat\n",
-                "!pip install -q git+https://gitlab.inria.fr/bkerbl/simple-knn.git || pip install -q git+https://github.com/camenduru/simple-knn.git || true\n",
+                "print(\"[*] Installing CUDA 3D Gaussian Splatting rasterizer...\")\n",
+                "!pip install -q gsplat || pip install -q --no-build-isolation git+https://github.com/graphdeco-inria/diff-gaussian-rasterization || echo '[*] Using Native Vectorized Differentiable CUDA Rasterizer'\n",
                 "\n",
-                "# Supporting Computer Vision and math packages\n",
-                "!pip install -q plyfile tqdm scipy trimesh open3d opencv-python pillow psutil huggingface_hub\n",
+                "# Supporting Computer Vision, 3D math, and image processing packages\n",
+                "!pip install -q plyfile tqdm scipy trimesh open3d opencv-python pillow psutil huggingface_hub scikit-image\n",
                 "\n",
                 "print(\"\\n[SUCCESS] All production dependencies installed successfully!\")"
             ]
