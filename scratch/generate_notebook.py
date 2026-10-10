@@ -82,7 +82,10 @@ notebook = {
             "outputs": [],
             "source": [
                 "# Cell 2: Automated Dependency Installation\n",
+                "!rm -f /etc/apt/sources.list.d/r2u.sources /etc/apt/sources.list.d/r2u.list 2>/dev/null || true\n",
                 "!apt-get update -qq && apt-get install -y -qq colmap ffmpeg git ninja-build cmake build-essential\n",
+                "\n",
+                "# 2. Pin setuptools to satisfy PyTorch constraints (<82)\n",
                 "!pip install -q \"setuptools<80\" wheel\n",
                 "\n",
                 "# Install verified Gaussian Splatting rasterizer libraries\n",
